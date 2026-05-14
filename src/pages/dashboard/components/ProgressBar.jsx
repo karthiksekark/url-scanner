@@ -1,12 +1,4 @@
-import type { ScanStatus } from '../../../shared/types'
-
-interface Props {
-  status: ScanStatus
-  completed: number
-  total: number
-}
-
-const STATUS_LABEL: Record<ScanStatus, string> = {
+const STATUS_LABEL = {
   idle: '',
   fetching_urls: 'Fetching URLs from API…',
   scanning: 'Scanning URLs…',
@@ -15,7 +7,7 @@ const STATUS_LABEL: Record<ScanStatus, string> = {
   error: 'Scan failed',
 }
 
-export function ProgressBar({ status, completed, total }: Props) {
+export function ProgressBar({ status, completed, total }) {
   if (status === 'idle') return null
 
   const pct = total > 0 ? Math.min(100, (completed / total) * 100) : 0
@@ -43,9 +35,9 @@ export function ProgressBar({ status, completed, total }: Props) {
           <div
             className={[
               'h-full rounded-full transition-all duration-300',
-              isError ? 'bg-red-500' :
-              status === 'stopped' ? 'bg-yellow-400' :
-              status === 'complete' ? 'bg-green-500' :
+              isError        ? 'bg-red-500'    :
+              status === 'stopped'  ? 'bg-yellow-400' :
+              status === 'complete' ? 'bg-green-500'  :
               'bg-blue-500',
             ].join(' ')}
             style={{ width: `${pct}%` }}

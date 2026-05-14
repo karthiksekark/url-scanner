@@ -1,10 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import type { ScanState, Settings, UrlResult } from '../../../shared/types'
-import { computeSummary, EMPTY_SUMMARY } from '../../../shared/types'
-import { getScanResults, saveScanResults } from '../../../shared/storage'
-import { fetchAllUrls, checkUrl, runConcurrent } from '../utils/urlChecker'
+import { computeSummary, EMPTY_SUMMARY } from '../../../shared/types.js'
+import { getScanResults, saveScanResults } from '../../../shared/storage.js'
+import { fetchAllUrls, checkUrl, runConcurrent } from '../utils/urlChecker.js'
 
-const INITIAL_STATE: ScanState = {
+const INITIAL_STATE = {
   status: 'idle',
   progress: { total: 0, completed: 0 },
   results: [],
@@ -14,12 +13,11 @@ const INITIAL_STATE: ScanState = {
 const BATCH_INTERVAL_MS = 250
 
 export function useScan() {
-  const [state, setState] = useState<ScanState>(INITIAL_STATE)
-  const abortRef = useRef<AbortController | null>(null)
-  const resultsRef = useRef<UrlResult[]>([])
-  const batchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [state, setState] = useState(INITIAL_STATE)
+  const abortRef = useRef(null)
+  const resultsRef = useRef([])
+  const batchTimerRef = useRef(null)
 
-  // Load persisted results on mount
   useEffect(() => {
     getScanResults().then(({ results, scannedAt }) => {
       if (results.length > 0) {
@@ -44,7 +42,7 @@ export function useScan() {
     }))
   }, [])
 
-  const startScan = useCallback(async (settings: Settings) => {
+  const startScan = useCallback(async (settings) => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
     resultsRef.current = []
@@ -78,9 +76,7 @@ export function useScan() {
         urls,
         settings.concurrency,
         (url) => checkUrl(url, settings.timeoutMs, signal),
-        (result) => {
-          resultsRef.current.push(result)
-        },
+        (result) => { resultsRef.current.push(result) },
         signal
       )
 
@@ -115,7 +111,7 @@ export function useScan() {
     setState((prev) => ({ ...prev, status: 'stopped' }))
   }, [flushBatch])
 
-  const recheckFailed = useCallback(async (settings: Settings) => {
+  const recheckFailed = useCallback(async (settings) => {
     const failedUrls = state.results
       .filter((r) => r.group === 'failed' || r.group === 'timeout')
       .map((r) => r.url)
@@ -129,7 +125,6 @@ export function useScan() {
     if (batchTimerRef.current) clearInterval(batchTimerRef.current)
     batchTimerRef.current = setInterval(flushBatch, BATCH_INTERVAL_MS)
 
-    // Seed ref with existing non-failed results
     resultsRef.current = state.results.filter(
       (r) => r.group !== 'failed' && r.group !== 'timeout'
     )
@@ -145,9 +140,7 @@ export function useScan() {
         failedUrls,
         settings.concurrency,
         (url) => checkUrl(url, settings.timeoutMs, signal),
-        (result) => {
-          resultsRef.current.push(result)
-        },
+        (result) => { resultsRef.current.push(result) },
         signal
       )
 

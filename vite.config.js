@@ -8,11 +8,4 @@ export default defineConfig({
     react(),
     crx({ manifest }),
   ],
-  build: {
-    rollupOptions: {
-      input: {
-        dashboard: 'src/pages/dashboard/index.html',
-      },
-    },
-  },
 })

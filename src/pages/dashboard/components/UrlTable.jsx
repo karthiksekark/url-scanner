@@ -1,12 +1,7 @@
 import { useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { UrlResult, StatusGroup } from '../../../shared/types'
 
-interface Props {
-  results: UrlResult[]
-}
-
-const GROUP_BADGE: Record<StatusGroup, { bg: string; text: string; label: string }> = {
+const GROUP_BADGE = {
   up:           { bg: 'bg-green-100',  text: 'text-green-700',  label: 'Up' },
   redirected:   { bg: 'bg-amber-100',  text: 'text-amber-700',  label: 'Redirected' },
   client_error: { bg: 'bg-orange-100', text: 'text-orange-700', label: '4xx Error' },
@@ -15,7 +10,7 @@ const GROUP_BADGE: Record<StatusGroup, { bg: string; text: string; label: string
   timeout:      { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Timeout' },
 }
 
-const STATUS_DOT: Record<StatusGroup, string> = {
+const STATUS_DOT = {
   up:           'bg-green-500',
   redirected:   'bg-amber-400',
   client_error: 'bg-orange-500',
@@ -26,8 +21,8 @@ const STATUS_DOT: Record<StatusGroup, string> = {
 
 const ROW_HEIGHT = 44
 
-export function UrlTable({ results }: Props) {
-  const parentRef = useRef<HTMLDivElement>(null)
+export function UrlTable({ results }) {
+  const parentRef = useRef(null)
 
   const rowVirtualizer = useVirtualizer({
     count: results.length,
@@ -47,8 +42,10 @@ export function UrlTable({ results }: Props) {
   return (
     <div className="border border-gray-200 rounded-lg overflow-hidden">
       {/* Fixed header */}
-      <div className="grid bg-gray-50 border-b border-gray-200 text-xs font-semibold uppercase tracking-wide text-gray-500"
-        style={{ gridTemplateColumns: '3rem 1fr 6rem 8rem 7rem 5rem' }}>
+      <div
+        className="grid bg-gray-50 border-b border-gray-200 text-xs font-semibold uppercase tracking-wide text-gray-500"
+        style={{ gridTemplateColumns: '3rem 1fr 6rem 8rem 7rem 5rem' }}
+      >
         <div className="px-3 py-3 text-right">#</div>
         <div className="px-3 py-3">URL</div>
         <div className="px-3 py-3 text-right">Status</div>
@@ -111,15 +108,15 @@ export function UrlTable({ results }: Props) {
                   </span>
                 </div>
                 <div className="px-3 flex items-center">
-                  {result.finalUrl ? (
+                  {result.finalUrl && (
                     <span
-                      className="text-xs text-amber-600 truncate cursor-pointer hover:underline"
+                      className="text-xs text-amber-600 cursor-pointer hover:underline"
                       title={result.finalUrl}
                       onClick={() => window.open(result.finalUrl, '_blank', 'noopener,noreferrer')}
                     >
                       ↪
                     </span>
-                  ) : null}
+                  )}
                 </div>
               </div>
             )

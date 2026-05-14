@@ -1,52 +1,38 @@
-import type { Settings, UrlResult, StatusGroup } from '../../../shared/types'
-import { getStatusGroup } from '../../../shared/types'
+import { getStatusGroup } from '../../../shared/types.js'
 
-// Resolves a nested path like "data.items" from a JSON object
-function resolvePath(obj: unknown, path: string): unknown {
+function resolvePath(obj, path) {
   if (!path) return obj
-  return path.split('.').reduce((acc: unknown, key) => {
-    if (acc && typeof acc === 'object' && key in (acc as Record<string, unknown>)) {
-      return (acc as Record<string, unknown>)[key]
-    }
+  return path.split('.').reduce((acc, key) => {
+    if (acc && typeof acc === 'object' && key in acc) return acc[key]
     return undefined
   }, obj)
 }
 
-// Auto-detects the array of items from the API response
-function extractItems(data: unknown, dataPath: string): unknown[] {
+function extractItems(data, dataPath) {
   const resolved = resolvePath(data, dataPath)
   if (Array.isArray(resolved)) return resolved
 
-  // Try common wrapper keys
   if (resolved && typeof resolved === 'object') {
-    const obj = resolved as Record<string, unknown>
     for (const key of ['data', 'results', 'items', 'urls', 'records', 'list']) {
-      if (Array.isArray(obj[key])) return obj[key] as unknown[]
+      if (Array.isArray(resolved[key])) return resolved[key]
     }
   }
 
   if (Array.isArray(data)) return data
   if (data && typeof data === 'object') {
-    const obj = data as Record<string, unknown>
     for (const key of ['data', 'results', 'items', 'urls', 'records', 'list']) {
-      if (Array.isArray(obj[key])) return obj[key] as unknown[]
+      if (Array.isArray(data[key])) return data[key]
     }
   }
 
-  throw new Error(
-    'Could not locate URL array in API response. Check your "Data path" setting.'
-  )
+  throw new Error('Could not locate URL array in API response. Check your "Data path" setting.')
 }
 
-export async function fetchAllUrls(
-  settings: Settings,
-  signal: AbortSignal,
-  onPageFetched?: (fetched: number) => void
-): Promise<string[]> {
-  const allUrls: string[] = []
+export async function fetchAllUrls(settings, signal, onPageFetched) {
+  const allUrls = []
   let page = 1
 
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const headers = { 'Content-Type': 'application/json' }
   for (const { key, value } of settings.customHeaders) {
     if (key.trim()) headers[key.trim()] = value
   }
@@ -66,25 +52,23 @@ export async function fetchAllUrls(
       throw new Error(`API returned ${response.status} ${response.statusText} on page ${page}`)
     }
 
-    const data: unknown = await response.json()
+    const data = await response.json()
     const items = extractItems(data, settings.dataPath)
 
     const urls = items
       .map((item) => {
         if (typeof item === 'string') return item
         if (item && typeof item === 'object') {
-          const obj = item as Record<string, unknown>
-          const val = obj[settings.urlField]
+          const val = item[settings.urlField]
           return typeof val === 'string' ? val : null
         }
         return null
       })
-      .filter((u): u is string => Boolean(u))
+      .filter(Boolean)
 
     allUrls.push(...urls)
     onPageFetched?.(allUrls.length)
 
-    // Stop if the page returned fewer items than requested (last page)
     if (items.length < settings.pageSize) break
     page++
   }
@@ -92,18 +76,13 @@ export async function fetchAllUrls(
   return allUrls
 }
 
-export async function checkUrl(
-  url: string,
-  timeoutMs: number,
-  scanSignal: AbortSignal
-): Promise<UrlResult> {
+export async function checkUrl(url, timeoutMs, scanSignal) {
   if (scanSignal.aborted) {
     return makeResult(url, 0, 'Cancelled', 'failed', 0)
   }
 
   const timeoutController = new AbortController()
   const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs)
-
   const onScanAbort = () => timeoutController.abort()
   scanSignal.addEventListener('abort', onScanAbort, { once: true })
 
@@ -119,13 +98,12 @@ export async function checkUrl(
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
 
-    const group = getStatusGroup(response.status, response.redirected)
-    const finalUrl = response.redirected && response.url !== url ? response.url : undefined
-
-    // Some servers block HEAD; fall back to GET on 405
     if (response.status === 405) {
       return await checkUrlGet(url, timeoutMs, scanSignal)
     }
+
+    const group = getStatusGroup(response.status, response.redirected)
+    const finalUrl = response.redirected && response.url !== url ? response.url : undefined
 
     return {
       url,
@@ -136,23 +114,22 @@ export async function checkUrl(
       checkedAt: Date.now(),
       finalUrl,
     }
-  } catch (err) {
+  } catch {
     const responseTime = Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
 
     const isTimeout = timeoutController.signal.aborted && !scanSignal.aborted
-    const group: StatusGroup = isTimeout ? 'timeout' : 'failed'
-    const statusText = isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error'
-    return makeResult(url, 0, statusText, group, responseTime)
+    return makeResult(
+      url, 0,
+      isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error',
+      isTimeout ? 'timeout' : 'failed',
+      responseTime
+    )
   }
 }
 
-async function checkUrlGet(
-  url: string,
-  timeoutMs: number,
-  scanSignal: AbortSignal
-): Promise<UrlResult> {
+async function checkUrlGet(url, timeoutMs, scanSignal) {
   const timeoutController = new AbortController()
   const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs)
   const onScanAbort = () => timeoutController.abort()
@@ -165,10 +142,7 @@ async function checkUrlGet(
       signal: timeoutController.signal,
       redirect: 'follow',
     })
-    // Cancel body to avoid downloading it
-    if (response.body) {
-      response.body.cancel().catch(() => undefined)
-    }
+    response.body?.cancel().catch(() => undefined)
     const responseTime = Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
@@ -184,28 +158,16 @@ async function checkUrlGet(
       checkedAt: Date.now(),
       finalUrl,
     }
-  } catch (err) {
+  } catch {
     const responseTime = Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
     const isTimeout = timeoutController.signal.aborted && !scanSignal.aborted
-    return makeResult(
-      url, 0,
-      isTimeout ? 'Timeout' : 'Network Error',
-      isTimeout ? 'timeout' : 'failed',
-      responseTime
-    )
+    return makeResult(url, 0, isTimeout ? 'Timeout' : 'Network Error', isTimeout ? 'timeout' : 'failed', responseTime)
   }
 }
 
-// Processes items with fixed concurrency, calling onResult after each completes.
-export async function runConcurrent<T>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<UrlResult>,
-  onResult: (result: UrlResult) => void,
-  signal: AbortSignal
-): Promise<void> {
+export async function runConcurrent(items, concurrency, fn, onResult, signal) {
   let idx = 0
   const workers = Array.from(
     { length: Math.min(concurrency, items.length) },
@@ -220,18 +182,12 @@ export async function runConcurrent<T>(
   await Promise.all(workers)
 }
 
-function makeResult(
-  url: string,
-  statusCode: number,
-  statusText: string,
-  group: StatusGroup,
-  responseTime: number
-): UrlResult {
+function makeResult(url, statusCode, statusText, group, responseTime) {
   return { url, statusCode, statusText, group, responseTime, checkedAt: Date.now() }
 }
 
-function defaultStatusText(code: number): string {
-  const map: Record<number, string> = {
+function defaultStatusText(code) {
+  const map = {
     200: 'OK', 201: 'Created', 204: 'No Content',
     301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified',
     400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
@@ -241,7 +197,7 @@ function defaultStatusText(code: number): string {
   return map[code] ?? String(code)
 }
 
-export function exportToCsv(results: UrlResult[]): void {
+export function exportToCsv(results) {
   const header = ['URL', 'Status Code', 'Status Text', 'Group', 'Response Time (ms)', 'Final URL', 'Checked At']
   const rows = results.map((r) => [
     r.url,

@@ -1,22 +1,12 @@
-interface Props {
-  search: string
-  onSearch: (v: string) => void
-  sortField: string
-  sortDir: 'asc' | 'desc'
-  onSort: (field: string) => void
-  total: number
-  filtered: number
-}
-
 const SORT_OPTIONS = [
-  { value: 'index', label: 'Scan Order' },
-  { value: 'url', label: 'URL' },
-  { value: 'statusCode', label: 'Status Code' },
-  { value: 'group', label: 'Status Group' },
+  { value: 'index',        label: 'Scan Order' },
+  { value: 'url',          label: 'URL' },
+  { value: 'statusCode',   label: 'Status Code' },
+  { value: 'group',        label: 'Status Group' },
   { value: 'responseTime', label: 'Response Time' },
 ]
 
-export function FilterBar({ search, onSearch, sortField, sortDir, onSort, total, filtered }: Props) {
+export function FilterBar({ search, onSearch, sortField, sortDir, onSort, total, filtered }) {
   return (
     <div className="flex items-center gap-3">
       <div className="relative flex-1 max-w-md">
@@ -57,7 +47,7 @@ export function FilterBar({ search, onSearch, sortField, sortDir, onSort, total,
         <button
           onClick={() => onSort(sortField)}
           className="p-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 transition-colors"
-          title={sortDir === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending'}
+          title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
         >
           {sortDir === 'asc' ? (
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

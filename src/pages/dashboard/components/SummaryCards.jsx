@@ -1,16 +1,8 @@
-import type { ScanSummary } from '../../../shared/types'
-
-interface Props {
-  summary: ScanSummary
-  activeFilter: string
-  onFilter: (group: string) => void
-}
-
 const CARDS = [
   {
     key: 'all',
     label: 'Total',
-    field: 'total' as keyof ScanSummary,
+    field: 'total',
     bg: 'bg-white',
     border: 'border-gray-200',
     activeBg: 'bg-gray-800',
@@ -21,7 +13,7 @@ const CARDS = [
   {
     key: 'up',
     label: 'Up',
-    field: 'up' as keyof ScanSummary,
+    field: 'up',
     bg: 'bg-green-50',
     border: 'border-green-200',
     activeBg: 'bg-green-600',
@@ -32,7 +24,7 @@ const CARDS = [
   {
     key: 'redirected',
     label: 'Redirected',
-    field: 'redirected' as keyof ScanSummary,
+    field: 'redirected',
     bg: 'bg-amber-50',
     border: 'border-amber-200',
     activeBg: 'bg-amber-500',
@@ -43,7 +35,7 @@ const CARDS = [
   {
     key: 'client_error',
     label: '4xx Errors',
-    field: 'client_error' as keyof ScanSummary,
+    field: 'client_error',
     bg: 'bg-orange-50',
     border: 'border-orange-200',
     activeBg: 'bg-orange-500',
@@ -54,7 +46,7 @@ const CARDS = [
   {
     key: 'server_error',
     label: '5xx Errors',
-    field: 'server_error' as keyof ScanSummary,
+    field: 'server_error',
     bg: 'bg-red-50',
     border: 'border-red-200',
     activeBg: 'bg-red-600',
@@ -65,7 +57,7 @@ const CARDS = [
   {
     key: 'failed',
     label: 'Failed',
-    field: 'failed' as keyof ScanSummary,
+    field: 'failed',
     bg: 'bg-gray-50',
     border: 'border-gray-300',
     activeBg: 'bg-gray-600',
@@ -76,7 +68,7 @@ const CARDS = [
   {
     key: 'timeout',
     label: 'Timeout',
-    field: 'timeout' as keyof ScanSummary,
+    field: 'timeout',
     bg: 'bg-purple-50',
     border: 'border-purple-200',
     activeBg: 'bg-purple-600',
@@ -84,9 +76,9 @@ const CARDS = [
     activeTextColor: 'text-white',
     countColor: 'text-purple-800',
   },
-] as const
+]
 
-export function SummaryCards({ summary, activeFilter, onFilter }: Props) {
+export function SummaryCards({ summary, activeFilter, onFilter }) {
   return (
     <div className="grid grid-cols-7 gap-3">
       {CARDS.map((card) => {
