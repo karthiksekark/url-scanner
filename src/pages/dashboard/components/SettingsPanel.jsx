@@ -4,12 +4,46 @@ import { DEFAULT_SETTINGS } from '../../../shared/types.js'
 const inputCls =
   'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent'
 
+const textareaCls =
+  'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-y min-h-[120px]'
+
 function Field({ label, hint, children }) {
   return (
     <div>
       <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
       {children}
       {hint && <p className="mt-1 text-xs text-gray-400">{hint}</p>}
+    </div>
+  )
+}
+
+function JsonEditor({ label, value, onChange, hint }) {
+  const [error, setError] = useState(null)
+
+  function handleChange(e) {
+    const val = e.target.value
+    onChange(val)
+    try {
+      JSON.parse(val)
+      setError(null)
+    } catch {
+      setError('Invalid JSON')
+    }
+  }
+
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+      <textarea
+        value={value}
+        onChange={handleChange}
+        className={`${textareaCls} ${error ? 'border-red-400 focus:ring-red-400' : ''}`}
+        spellCheck={false}
+      />
+      {error
+        ? <p className="mt-1 text-xs text-red-500">{error}</p>
+        : hint && <p className="mt-1 text-xs text-gray-400">{hint}</p>
+      }
     </div>
   )
 }
@@ -34,28 +68,47 @@ export function SettingsPanel({ settings, onSave }) {
   function handleReset() {
     setForm(DEFAULT_SETTINGS)
     setSaved(false)
+    setTestResult(null)
+  }
+
+  async function testRequest(payload, label) {
+    const headers = { 'Content-Type': 'application/json' }
+    for (const { key, value } of form.customHeaders) {
+      if (key.trim()) headers[key.trim()] = value
+    }
+
+    let url, fetchOptions
+    if (form.method === 'POST') {
+      url = form.apiEndpoint
+      fetchOptions = { method: 'POST', credentials: 'include', headers, body: payload }
+    } else {
+      const endpoint = new URL(form.apiEndpoint)
+      try {
+        const params = JSON.parse(payload || '{}')
+        for (const [k, v] of Object.entries(params)) endpoint.searchParams.set(k, String(v))
+      } catch { /* ignore */ }
+      url = endpoint.toString()
+      fetchOptions = { method: 'GET', credentials: 'include', headers }
+    }
+
+    const res = await fetch(url, fetchOptions)
+    if (!res.ok) return `${label}: API returned ${res.status} ${res.statusText}`
+    const data = await res.json()
+    const count = Array.isArray(data) ? data.length : '?'
+    return `✓ ${label}: received ${count} URLs`
   }
 
   async function handleTest() {
+    if (!form.apiEndpoint) return
     setTesting(true)
     setTestResult(null)
     try {
-      const endpoint = new URL(form.apiEndpoint)
-      endpoint.searchParams.set(form.pageParam, '1')
-      endpoint.searchParams.set(form.limitParam, '1')
-
-      const headers = {}
-      for (const { key, value } of form.customHeaders) {
-        if (key.trim()) headers[key.trim()] = value
+      const r1 = await testRequest(form.payload1, 'Request 1')
+      let r2 = null
+      if (form.enableRequest2) {
+        r2 = await testRequest(form.payload2, 'Request 2')
       }
-
-      const res = await fetch(endpoint.toString(), { credentials: 'include', headers })
-      if (!res.ok) {
-        setTestResult(`API returned ${res.status} ${res.statusText}`)
-        return
-      }
-      const data = await res.json()
-      setTestResult(`✓ Success — ${JSON.stringify(data).slice(0, 120)}…`)
+      setTestResult([r1, r2].filter(Boolean).join('\n'))
     } catch (err) {
       setTestResult(err instanceof Error ? err.message : 'Request failed')
     } finally {
@@ -72,17 +125,24 @@ export function SettingsPanel({ settings, onSave }) {
   }
 
   function updateHeader(i, field, val) {
-    const updated = form.customHeaders.map((h, idx) => idx === i ? { ...h, [field]: val } : h)
-    update('customHeaders', updated)
+    update('customHeaders', form.customHeaders.map((h, idx) => idx === i ? { ...h, [field]: val } : h))
   }
+
+  const isPost = form.method === 'POST'
+  const payloadLabel = isPost ? 'JSON body' : 'Query params (as JSON)'
+  const payloadHint = isPost
+    ? 'Sent as the request body with Content-Type: application/json'
+    : 'Keys and values are appended as ?key=value to the URL'
 
   return (
     <div className="max-w-2xl space-y-8">
+
       {/* API */}
       <section>
         <h2 className="text-base font-semibold text-gray-900 mb-4 pb-2 border-b">API Configuration</h2>
-        <div className="space-y-4">
-          <Field label="API Endpoint URL" hint="The base URL of your paginated URL list API">
+        <div className="space-y-5">
+
+          <Field label="API Endpoint URL" hint="Same URL is used for both requests">
             <input
               type="url"
               value={form.apiEndpoint}
@@ -92,41 +152,79 @@ export function SettingsPanel({ settings, onSave }) {
             />
           </Field>
 
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Page param name" hint="Query param for page number">
-              <input type="text" value={form.pageParam}
-                onChange={(e) => update('pageParam', e.target.value)}
-                placeholder="page" className={inputCls} />
-            </Field>
-            <Field label="Limit param name" hint="Query param for page size">
-              <input type="text" value={form.limitParam}
-                onChange={(e) => update('limitParam', e.target.value)}
-                placeholder="limit" className={inputCls} />
-            </Field>
+          {/* Method toggle */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Method</label>
+            <div className="flex rounded-lg border border-gray-300 overflow-hidden w-fit">
+              {['GET', 'POST'].map((m) => (
+                <button
+                  key={m}
+                  onClick={() => update('method', m)}
+                  className={[
+                    'px-6 py-2 text-sm font-medium transition-colors',
+                    form.method === m
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white text-gray-600 hover:bg-gray-50',
+                  ].join(' ')}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Page size" hint="Number of items per API page">
-              <input type="number" min={1} max={1000} value={form.pageSize}
-                onChange={(e) => update('pageSize', Number(e.target.value))}
-                className={inputCls} />
-            </Field>
-            <Field label="URL field name" hint="The key in each object that holds the URL">
-              <input type="text" value={form.urlField}
-                onChange={(e) => update('urlField', e.target.value)}
-                placeholder="url" className={inputCls} />
-            </Field>
+          {/* Request 1 */}
+          <div className="rounded-lg border border-gray-200 p-4 space-y-3 bg-gray-50">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-blue-600 text-white text-xs font-bold">1</span>
+              <span className="text-sm font-semibold text-gray-800">Request 1</span>
+            </div>
+            <JsonEditor
+              label={payloadLabel}
+              value={form.payload1}
+              onChange={(v) => update('payload1', v)}
+              hint={payloadHint}
+            />
           </div>
 
-          <Field
-            label="Data path (optional)"
-            hint='Dot-notation path to the array in the response. E.g. "data" or "results.items". Leave blank if root is the array.'
-          >
-            <input type="text" value={form.dataPath}
-              onChange={(e) => update('dataPath', e.target.value)}
-              placeholder="data" className={inputCls} />
-          </Field>
+          {/* Request 2 */}
+          <div className="rounded-lg border border-gray-200 p-4 space-y-3 bg-gray-50">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-indigo-600 text-white text-xs font-bold">2</span>
+                <span className="text-sm font-semibold text-gray-800">Request 2</span>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <span className="text-xs text-gray-500">Enable</span>
+                <div
+                  onClick={() => update('enableRequest2', !form.enableRequest2)}
+                  className={[
+                    'relative w-9 h-5 rounded-full transition-colors cursor-pointer',
+                    form.enableRequest2 ? 'bg-blue-600' : 'bg-gray-300',
+                  ].join(' ')}
+                >
+                  <span className={[
+                    'absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform',
+                    form.enableRequest2 ? 'translate-x-4' : 'translate-x-0',
+                  ].join(' ')} />
+                </div>
+              </label>
+            </div>
 
+            {form.enableRequest2 && (
+              <JsonEditor
+                label={payloadLabel}
+                value={form.payload2}
+                onChange={(v) => update('payload2', v)}
+                hint={payloadHint}
+              />
+            )}
+            {!form.enableRequest2 && (
+              <p className="text-xs text-gray-400 italic">Request 2 is disabled — only Request 1 will be used.</p>
+            )}
+          </div>
+
+          {/* Custom headers */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-sm font-medium text-gray-700">Custom request headers</label>
@@ -135,9 +233,7 @@ export function SettingsPanel({ settings, onSave }) {
               </button>
             </div>
             {form.customHeaders.length === 0 && (
-              <p className="text-sm text-gray-400 italic">
-                No custom headers. Session cookies are sent automatically.
-              </p>
+              <p className="text-sm text-gray-400 italic">No custom headers. Session cookies are sent automatically.</p>
             )}
             <div className="space-y-2">
               {form.customHeaders.map((h, i) => (
@@ -154,7 +250,8 @@ export function SettingsPanel({ settings, onSave }) {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 pt-2">
+          {/* Test connection */}
+          <div className="space-y-2 pt-1">
             <button
               onClick={handleTest}
               disabled={!form.apiEndpoint || testing}
@@ -163,9 +260,9 @@ export function SettingsPanel({ settings, onSave }) {
               {testing ? 'Testing…' : 'Test connection'}
             </button>
             {testResult && (
-              <span className={`text-xs break-all ${testResult.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>
+              <pre className={`text-xs whitespace-pre-wrap ${testResult.includes('✓') && !testResult.split('\n').some(l => !l.startsWith('✓')) ? 'text-green-600' : testResult.startsWith('✓') ? 'text-amber-600' : 'text-red-600'}`}>
                 {testResult}
-              </span>
+              </pre>
             )}
           </div>
         </div>

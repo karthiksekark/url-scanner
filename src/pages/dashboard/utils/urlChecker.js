@@ -1,79 +1,59 @@
 import { getStatusGroup } from '../../../shared/types.js'
 
-function resolvePath(obj, path) {
-  if (!path) return obj
-  return path.split('.').reduce((acc, key) => {
-    if (acc && typeof acc === 'object' && key in acc) return acc[key]
-    return undefined
-  }, obj)
-}
-
-function extractItems(data, dataPath) {
-  const resolved = resolvePath(data, dataPath)
-  if (Array.isArray(resolved)) return resolved
-
-  if (resolved && typeof resolved === 'object') {
-    for (const key of ['data', 'results', 'items', 'urls', 'records', 'list']) {
-      if (Array.isArray(resolved[key])) return resolved[key]
-    }
-  }
-
-  if (Array.isArray(data)) return data
-  if (data && typeof data === 'object') {
-    for (const key of ['data', 'results', 'items', 'urls', 'records', 'list']) {
-      if (Array.isArray(data[key])) return data[key]
-    }
-  }
-
-  throw new Error('Could not locate URL array in API response. Check your "Data path" setting.')
-}
-
-export async function fetchAllUrls(settings, signal, onPageFetched) {
-  const allUrls = []
-  let page = 1
-
+async function singleRequest(settings, payload, signal) {
   const headers = { 'Content-Type': 'application/json' }
   for (const { key, value } of settings.customHeaders) {
     if (key.trim()) headers[key.trim()] = value
   }
 
-  while (!signal.aborted) {
-    const endpoint = new URL(settings.apiEndpoint)
-    endpoint.searchParams.set(settings.pageParam, String(page))
-    endpoint.searchParams.set(settings.limitParam, String(settings.pageSize))
-
-    const response = await fetch(endpoint.toString(), {
+  let url, fetchOptions
+  if (settings.method === 'POST') {
+    url = settings.apiEndpoint
+    fetchOptions = {
+      method: 'POST',
       signal,
       credentials: 'include',
       headers,
-    })
-
-    if (!response.ok) {
-      throw new Error(`API returned ${response.status} ${response.statusText} on page ${page}`)
+      body: payload,
     }
-
-    const data = await response.json()
-    const items = extractItems(data, settings.dataPath)
-
-    const urls = items
-      .map((item) => {
-        if (typeof item === 'string') return item
-        if (item && typeof item === 'object') {
-          const val = item[settings.urlField]
-          return typeof val === 'string' ? val : null
-        }
-        return null
-      })
-      .filter(Boolean)
-
-    allUrls.push(...urls)
-    onPageFetched?.(allUrls.length)
-
-    if (items.length < settings.pageSize) break
-    page++
+  } else {
+    // GET — payload JSON keys become query params
+    const endpoint = new URL(settings.apiEndpoint)
+    try {
+      const params = JSON.parse(payload || '{}')
+      for (const [k, v] of Object.entries(params)) {
+        endpoint.searchParams.set(k, String(v))
+      }
+    } catch {
+      // ignore invalid JSON, use endpoint as-is
+    }
+    url = endpoint.toString()
+    fetchOptions = { method: 'GET', signal, credentials: 'include', headers }
   }
 
-  return allUrls
+  const response = await fetch(url, fetchOptions)
+  if (!response.ok) {
+    throw new Error(`API returned ${response.status} ${response.statusText}`)
+  }
+
+  const data = await response.json()
+  if (!Array.isArray(data)) {
+    throw new Error('Expected API response to be an array of URL strings.')
+  }
+  return data.filter((item) => typeof item === 'string')
+}
+
+export async function fetchAllUrls(settings, signal, onFetched) {
+  const urls1 = await singleRequest(settings, settings.payload1, signal)
+  onFetched?.(urls1.length)
+
+  let urls2 = []
+  if (settings.enableRequest2 && !signal.aborted) {
+    urls2 = await singleRequest(settings, settings.payload2, signal)
+    onFetched?.(urls1.length + urls2.length)
+  }
+
+  return [...urls1, ...urls2]
 }
 
 export async function checkUrl(url, timeoutMs, scanSignal) {
