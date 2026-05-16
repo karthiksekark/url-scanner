@@ -53,7 +53,10 @@ export async function fetchAllUrls(settings, signal, onFetched) {
     onFetched?.(urls1.length + urls2.length)
   }
 
-  return [...urls1, ...urls2]
+  return [
+    ...urls1.map((url) => ({ url, source: 1 })),
+    ...urls2.map((url) => ({ url, source: 2 })),
+  ]
 }
 
 export async function checkUrl(url, timeoutMs, scanSignal) {
@@ -78,7 +81,7 @@ export async function checkUrl(url, timeoutMs, scanSignal) {
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
 
-    if (response.status === 405) {
+    if (response.status === 405 || response.status >= 500) {
       return await checkUrlGet(url, timeoutMs, scanSignal)
     }
 
@@ -154,8 +157,9 @@ export async function runConcurrent(items, concurrency, fn, onResult, signal) {
     async () => {
       while (idx < items.length && !signal.aborted) {
         const i = idx++
-        const result = await fn(items[i])
-        onResult(result)
+        const item = items[i]
+        const result = await fn(item)
+        onResult(result, item)
       }
     }
   )
@@ -178,9 +182,11 @@ function defaultStatusText(code) {
 }
 
 export function exportToCsv(results) {
-  const header = ['URL', 'Status Code', 'Status Text', 'Group', 'Response Time (ms)', 'Final URL', 'Checked At']
+  const header = ['URL', 'Device Type', 'Product Type', 'Status Code', 'Status Text', 'Group', 'Response Time (ms)', 'Final URL', 'Checked At']
   const rows = results.map((r) => [
     r.url,
+    r.deviceType ?? '',
+    r.productType ?? '',
     String(r.statusCode || ''),
     r.statusText,
     r.group,
