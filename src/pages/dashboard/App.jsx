@@ -3,20 +3,14 @@ import { getSettings, saveSettings } from '../../shared/storage.js'
 import { useScan } from './hooks/useScan.js'
 import { SummaryCards } from './components/SummaryCards.jsx'
 import { ProgressBar } from './components/ProgressBar.jsx'
-import { FilterBar } from './components/FilterBar.jsx'
 import { UrlTable } from './components/UrlTable.jsx'
 import { SettingsPanel } from './components/SettingsPanel.jsx'
 import { exportToCsv } from './utils/urlChecker.js'
-
-const GROUP_ORDER = { server_error: 0, client_error: 1, timeout: 2, failed: 3, redirected: 4, up: 5 }
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('scanner')
   const [settings, setSettings] = useState(null)
   const [statusFilter, setStatusFilter] = useState('all')
-  const [search, setSearch] = useState('')
-  const [sortField, setSortField] = useState('index')
-  const [sortDir, setSortDir] = useState('asc')
 
   const { state, startScan, stopScan, recheckFailed } = useScan()
 
@@ -40,44 +34,16 @@ export default function App() {
     }
   }
 
-  function handleSort(field) {
-    if (field === sortField) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    } else {
-      setSortField(field)
-      setSortDir('asc')
-    }
-  }
-
-  const filteredAndSorted = useMemo(() => {
-    let results = state.results
-
-    if (statusFilter !== 'all') {
-      results = results.filter((r) => r.group === statusFilter)
-    }
-
-    if (search.trim()) {
-      const q = search.toLowerCase()
-      results = results.filter((r) => r.url.toLowerCase().includes(q))
-    }
-
-    if (sortField !== 'index') {
-      results = [...results].sort((a, b) => {
-        let cmp = 0
-        if (sortField === 'url')          cmp = a.url.localeCompare(b.url)
-        else if (sortField === 'statusCode')   cmp = a.statusCode - b.statusCode
-        else if (sortField === 'group')        cmp = (GROUP_ORDER[a.group] ?? 99) - (GROUP_ORDER[b.group] ?? 99)
-        else if (sortField === 'responseTime') cmp = a.responseTime - b.responseTime
-        return sortDir === 'asc' ? cmp : -cmp
-      })
-    }
-
-    return results
-  }, [state.results, statusFilter, search, sortField, sortDir])
+  // SummaryCard group pre-filter; UrlTable handles column-level filters, sort, pagination
+  const preFiltered = useMemo(() => {
+    if (statusFilter === 'all') return state.results
+    return state.results.filter((r) => r.group === statusFilter)
+  }, [state.results, statusFilter])
 
   const isScanning = state.status === 'scanning' || state.status === 'fetching_urls'
   const hasResults = state.results.length > 0
   const failedCount = state.summary.failed + state.summary.timeout
+  const hasPreFiltered = preFiltered.length > 0
 
   if (!settings) {
     return (
@@ -211,20 +177,7 @@ export default function App() {
               </p>
             )}
 
-            {hasResults && (
-              <div className="space-y-3">
-                <FilterBar
-                  search={search}
-                  onSearch={setSearch}
-                  sortField={sortField}
-                  sortDir={sortDir}
-                  onSort={handleSort}
-                  total={state.results.length}
-                  filtered={filteredAndSorted.length}
-                />
-                <UrlTable results={filteredAndSorted} />
-              </div>
-            )}
+            {hasPreFiltered && <UrlTable results={preFiltered} />}
           </>
         ) : (
           <SettingsPanel settings={settings} onSave={handleSaveSettings} />

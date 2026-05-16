@@ -81,7 +81,7 @@ export async function checkUrl(url, timeoutMs, scanSignal) {
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
 
-    if (response.status === 405) {
+    if (response.status === 405 || response.status >= 500) {
       return await checkUrlGet(url, timeoutMs, scanSignal)
     }
 
