@@ -12,6 +12,15 @@ const INITIAL_STATE = {
 
 const BATCH_INTERVAL_MS = 250
 
+function firstPathSegment(url) {
+  try {
+    const { pathname } = new URL(url)
+    return pathname.split('/').filter(Boolean)[0] ?? ''
+  } catch {
+    return ''
+  }
+}
+
 export function useScan() {
   const [state, setState] = useState(INITIAL_STATE)
   const abortRef = useRef(null)
@@ -21,12 +30,16 @@ export function useScan() {
   useEffect(() => {
     getScanResults().then(({ results, scannedAt }) => {
       if (results.length > 0) {
-        setState({
-          status: 'complete',
-          progress: { total: results.length, completed: results.length },
-          results,
-          summary: computeSummary(results),
-          lastScannedAt: scannedAt,
+        setState((prev) => {
+          // Don't overwrite if a scan has already started
+          if (prev.status !== 'idle') return prev
+          return {
+            status: 'complete',
+            progress: { total: results.length, completed: results.length },
+            results,
+            summary: computeSummary(results),
+            lastScannedAt: scannedAt,
+          }
         })
       }
     })
@@ -60,23 +73,31 @@ export function useScan() {
     const signal = abortRef.current.signal
 
     try {
-      const urls = await fetchAllUrls(settings, signal, (fetched) => {
+      const tagged = await fetchAllUrls(settings, signal, (fetched) => {
         setState((prev) => ({ ...prev, progress: { total: fetched, completed: 0 } }))
       })
 
       if (signal.aborted) return
 
+      const enriched = tagged.map(({ url, source }) => ({
+        url,
+        deviceType: source === 1 ? 'devices' : 'accy',
+        productType: firstPathSegment(url),
+      }))
+
       setState((prev) => ({
         ...prev,
         status: 'scanning',
-        progress: { total: urls.length, completed: 0 },
+        progress: { total: enriched.length, completed: 0 },
       }))
 
       await runConcurrent(
-        urls,
+        enriched,
         settings.concurrency,
-        (url) => checkUrl(url, settings.timeoutMs, signal),
-        (result) => { resultsRef.current.push(result) },
+        ({ url }) => checkUrl(url, settings.timeoutMs, signal),
+        (result, { deviceType, productType }) => {
+          resultsRef.current.push({ ...result, deviceType, productType })
+        },
         signal
       )
 
@@ -88,7 +109,7 @@ export function useScan() {
 
       setState({
         status: signal.aborted ? 'stopped' : 'complete',
-        progress: { total: urls.length, completed: finalResults.length },
+        progress: { total: enriched.length, completed: finalResults.length },
         results: finalResults,
         summary: computeSummary(finalResults),
         lastScannedAt: scannedAt,
@@ -112,11 +133,11 @@ export function useScan() {
   }, [flushBatch])
 
   const recheckFailed = useCallback(async (settings) => {
-    const failedUrls = state.results
+    const failedItems = state.results
       .filter((r) => r.group === 'failed' || r.group === 'timeout')
-      .map((r) => r.url)
+      .map((r) => ({ url: r.url, deviceType: r.deviceType ?? '', productType: r.productType ?? '' }))
 
-    if (failedUrls.length === 0) return
+    if (failedItems.length === 0) return
 
     abortRef.current?.abort()
     abortRef.current = new AbortController()
@@ -132,15 +153,17 @@ export function useScan() {
     setState((prev) => ({
       ...prev,
       status: 'scanning',
-      progress: { total: prev.results.length, completed: prev.results.length - failedUrls.length },
+      progress: { total: prev.results.length, completed: prev.results.length - failedItems.length },
     }))
 
     try {
       await runConcurrent(
-        failedUrls,
+        failedItems,
         settings.concurrency,
-        (url) => checkUrl(url, settings.timeoutMs, signal),
-        (result) => { resultsRef.current.push(result) },
+        ({ url }) => checkUrl(url, settings.timeoutMs, signal),
+        (result, { deviceType, productType }) => {
+          resultsRef.current.push({ ...result, deviceType, productType })
+        },
         signal
       )
 

@@ -23,13 +23,21 @@ export default function App() {
   useEffect(() => {
     getSettings().then((s) => {
       setSettings(s)
-      if (!s.apiEndpoint) setActiveTab('settings')
+      if (!s.apiEndpoint) {
+        setActiveTab('settings')
+      } else {
+        startScan(s)
+      }
     })
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSaveSettings(s) {
     setSettings(s)
     saveSettings(s)
+    if (s.apiEndpoint) {
+      startScan(s)
+      setActiveTab('scanner')
+    }
   }
 
   function handleSort(field) {

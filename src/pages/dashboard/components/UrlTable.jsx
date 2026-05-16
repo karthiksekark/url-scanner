@@ -21,6 +21,20 @@ const STATUS_DOT = {
 
 const ROW_HEIGHT = 44
 
+// '3rem 1fr 7rem 8rem 6rem 8rem 7rem 5rem'
+// # | URL | Device Type | Product Type | Status | Group | Response | Redirect
+const COLS = '3rem 1fr 7rem 8rem 6rem 8rem 7rem 5rem'
+
+function pageName(url) {
+  try {
+    const segments = new URL(url).pathname.split('/').filter(Boolean)
+    const last = segments[segments.length - 1] ?? ''
+    return last.replace(/-/g, ' ') || url
+  } catch {
+    return url
+  }
+}
+
 export function UrlTable({ results }) {
   const parentRef = useRef(null)
 
@@ -44,10 +58,12 @@ export function UrlTable({ results }) {
       {/* Fixed header */}
       <div
         className="grid bg-gray-50 border-b border-gray-200 text-xs font-semibold uppercase tracking-wide text-gray-500"
-        style={{ gridTemplateColumns: '3rem 1fr 6rem 8rem 7rem 5rem' }}
+        style={{ gridTemplateColumns: COLS }}
       >
         <div className="px-3 py-3 text-right">#</div>
         <div className="px-3 py-3">URL</div>
+        <div className="px-3 py-3">Device Type</div>
+        <div className="px-3 py-3">Product Type</div>
         <div className="px-3 py-3 text-right">Status</div>
         <div className="px-3 py-3">Group</div>
         <div className="px-3 py-3 text-right">Response</div>
@@ -64,6 +80,7 @@ export function UrlTable({ results }) {
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const result = results[virtualRow.index]
             const badge = GROUP_BADGE[result.group]
+            const name = pageName(result.url)
             return (
               <div
                 key={virtualRow.key}
@@ -76,46 +93,71 @@ export function UrlTable({ results }) {
                 style={{
                   transform: `translateY(${virtualRow.start}px)`,
                   height: ROW_HEIGHT,
-                  gridTemplateColumns: '3rem 1fr 6rem 8rem 7rem 5rem',
+                  gridTemplateColumns: COLS,
                 }}
               >
+                {/* # */}
                 <div className="px-3 flex items-center justify-end text-xs text-gray-400 tabular-nums">
                   {virtualRow.index + 1}
                 </div>
+
+                {/* URL — shows page name, opens full URL */}
                 <div className="px-3 flex items-center min-w-0">
-                  <span
-                    className="text-sm text-blue-700 truncate hover:underline cursor-pointer"
+                  <a
+                    href={result.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     title={result.url}
-                    onClick={() => window.open(result.url, '_blank', 'noopener,noreferrer')}
+                    className="text-sm text-blue-700 truncate hover:underline capitalize"
                   >
-                    {result.url}
-                  </span>
+                    {name}
+                  </a>
                 </div>
+
+                {/* Device Type */}
+                <div className="px-3 flex items-center">
+                  <span className="text-xs text-gray-600 truncate">{result.deviceType ?? ''}</span>
+                </div>
+
+                {/* Product Type */}
+                <div className="px-3 flex items-center">
+                  <span className="text-xs text-gray-600 truncate">{result.productType ?? ''}</span>
+                </div>
+
+                {/* Status code */}
                 <div className="px-3 flex items-center justify-end gap-2">
                   <span className={`h-2 w-2 rounded-full flex-shrink-0 ${STATUS_DOT[result.group]}`} />
                   <span className="text-sm font-mono tabular-nums font-medium text-gray-800">
                     {result.statusCode || '—'}
                   </span>
                 </div>
+
+                {/* Group badge */}
                 <div className="px-3 flex items-center">
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.bg} ${badge.text}`}>
                     {badge.label}
                   </span>
                 </div>
+
+                {/* Response time */}
                 <div className="px-3 flex items-center justify-end">
                   <span className="text-xs tabular-nums text-gray-500">
                     {result.responseTime > 0 ? `${result.responseTime.toLocaleString()} ms` : '—'}
                   </span>
                 </div>
+
+                {/* Redirect arrow */}
                 <div className="px-3 flex items-center">
                   {result.finalUrl && (
-                    <span
-                      className="text-xs text-amber-600 cursor-pointer hover:underline"
+                    <a
+                      href={result.finalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
                       title={result.finalUrl}
-                      onClick={() => window.open(result.finalUrl, '_blank', 'noopener,noreferrer')}
+                      className="text-xs text-amber-600 hover:underline"
                     >
                       ↪
-                    </span>
+                    </a>
                   )}
                 </div>
               </div>
