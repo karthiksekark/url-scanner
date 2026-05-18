@@ -1,5 +1,12 @@
 import { getStatusGroup } from '../../../shared/types.js'
 
+// Headers that make requests look like real browser navigation.
+// Some servers/CDNs return different responses for requests missing Accept.
+const BROWSER_HEADERS = {
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.5',
+}
+
 async function singleRequest(settings, payload, signal) {
   const headers = { 'Content-Type': 'application/json' }
   for (const { key, value } of settings.customHeaders) {
@@ -97,7 +104,7 @@ export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
   try {
     // Run HEAD check and brand fetch concurrently
     const [headSettled, brandSettled] = await Promise.allSettled([
-      fetch(url, { method: 'HEAD', signal: timeoutController.signal, redirect: 'follow', credentials: 'include' })
+      fetch(url, { method: 'HEAD', signal: timeoutController.signal, redirect: 'follow', credentials: 'include', headers: BROWSER_HEADERS })
         .then((r) => { headResponseTime = Math.round(performance.now() - startTime); return r }),
       fetchBrand(apiEndpoint, id, timeoutController.signal),
     ])
@@ -122,7 +129,10 @@ export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
     }
 
     const response = headSettled.value
-    if (response.status === 405 || response.status >= 500) {
+    // Fall back to GET for any non-success HEAD response.
+    // HEAD is unreliable on many servers: 4XX and 5XX from HEAD often don't
+    // reflect the real page status — GET is the authoritative check.
+    if (response.status < 200 || response.status >= 400) {
       return await checkUrlGet(url, timeoutMs, scanSignal, brand)
     }
 
@@ -170,6 +180,7 @@ async function checkUrlGet(url, timeoutMs, scanSignal, brand = '') {
       signal: timeoutController.signal,
       redirect: 'follow',
       credentials: 'include',
+      headers: BROWSER_HEADERS,
     })
     response.body?.cancel().catch(() => undefined)
     const responseTime = Math.round(performance.now() - startTime)
