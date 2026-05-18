@@ -26,6 +26,7 @@ export function useScan() {
   const abortRef = useRef(null)
   const resultsRef = useRef([])
   const batchTimerRef = useRef(null)
+  const scanGenRef = useRef(0)  // incremented on every new scan to discard stale callbacks
 
   useEffect(() => {
     getScanResults().then(({ results, scannedAt }) => {
@@ -59,6 +60,7 @@ export function useScan() {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
     resultsRef.current = []
+    const scanGen = ++scanGenRef.current
 
     if (batchTimerRef.current) clearInterval(batchTimerRef.current)
     batchTimerRef.current = setInterval(flushBatch, BATCH_INTERVAL_MS)
@@ -97,6 +99,7 @@ export function useScan() {
         settings.concurrency,
         ({ url, id }) => checkUrl(url, settings.timeoutMs, signal, settings.apiEndpoint, id),
         (result, { id, deviceType, productType }) => {
+          if (scanGenRef.current !== scanGen) return  // discard results from a superseded scan
           resultsRef.current.push({ ...result, id, deviceType, productType })
         },
         signal
@@ -143,6 +146,7 @@ export function useScan() {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
     const signal = abortRef.current.signal
+    const scanGen = ++scanGenRef.current
 
     if (batchTimerRef.current) clearInterval(batchTimerRef.current)
     batchTimerRef.current = setInterval(flushBatch, BATCH_INTERVAL_MS)
@@ -163,6 +167,7 @@ export function useScan() {
         settings.concurrency,
         ({ url, id }) => checkUrl(url, settings.timeoutMs, signal, settings.apiEndpoint, id),
         (result, { id, deviceType, productType }) => {
+          if (scanGenRef.current !== scanGen) return  // discard results from a superseded recheck
           resultsRef.current.push({ ...result, id, deviceType, productType })
         },
         signal
