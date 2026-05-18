@@ -97,7 +97,7 @@ export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
   try {
     // Run HEAD check and brand fetch concurrently
     const [headSettled, brandSettled] = await Promise.allSettled([
-      fetch(url, { method: 'HEAD', signal: timeoutController.signal, redirect: 'follow' })
+      fetch(url, { method: 'HEAD', signal: timeoutController.signal, redirect: 'follow', credentials: 'include' })
         .then((r) => { headResponseTime = Math.round(performance.now() - startTime); return r }),
       fetchBrand(apiEndpoint, id, timeoutController.signal),
     ])
@@ -169,6 +169,7 @@ async function checkUrlGet(url, timeoutMs, scanSignal, brand = '') {
       method: 'GET',
       signal: timeoutController.signal,
       redirect: 'follow',
+      credentials: 'include',
     })
     response.body?.cancel().catch(() => undefined)
     const responseTime = Math.round(performance.now() - startTime)
