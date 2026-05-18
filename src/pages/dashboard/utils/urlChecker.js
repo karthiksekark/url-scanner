@@ -9,21 +9,12 @@ async function singleRequest(settings, payload, signal) {
   let url, fetchOptions
   if (settings.method === 'POST') {
     url = settings.apiEndpoint
-    fetchOptions = {
-      method: 'POST',
-      signal,
-      credentials: 'include',
-      headers,
-      body: payload,
-    }
+    fetchOptions = { method: 'POST', signal, credentials: 'include', headers, body: payload }
   } else {
-    // GET — payload JSON keys become query params
     const endpoint = new URL(settings.apiEndpoint)
     try {
       const params = JSON.parse(payload || '{}')
-      for (const [k, v] of Object.entries(params)) {
-        endpoint.searchParams.set(k, String(v))
-      }
+      for (const [k, v] of Object.entries(params)) endpoint.searchParams.set(k, String(v))
     } catch {
       // ignore invalid JSON, use endpoint as-is
     }
@@ -37,31 +28,62 @@ async function singleRequest(settings, payload, signal) {
   }
 
   const data = await response.json()
-  if (!Array.isArray(data)) {
-    throw new Error('Expected API response to be an array of URL strings.')
+
+  // Response is { "/path": "id", ... }
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    throw new Error('Expected API response to be an object mapping URL paths to IDs.')
   }
-  return data.filter((item) => typeof item === 'string')
+
+  const base = (settings.siteBaseUrl ?? '').replace(/\/+$/, '')
+  return Object.entries(data).map(([path, id]) => ({
+    url: base + path,
+    id: String(id),
+  }))
 }
 
 export async function fetchAllUrls(settings, signal, onFetched) {
-  const urls1 = await singleRequest(settings, settings.payload1, signal)
-  onFetched?.(urls1.length)
+  const items1 = await singleRequest(settings, settings.payload1, signal)
+  onFetched?.(items1.length)
 
-  let urls2 = []
+  let items2 = []
   if (settings.enableRequest2 && !signal.aborted) {
-    urls2 = await singleRequest(settings, settings.payload2, signal)
-    onFetched?.(urls1.length + urls2.length)
+    items2 = await singleRequest(settings, settings.payload2, signal)
+    onFetched?.(items1.length + items2.length)
   }
 
   return [
-    ...urls1.map((url) => ({ url, source: 1 })),
-    ...urls2.map((url) => ({ url, source: 2 })),
+    ...items1.map(({ url, id }) => ({ url, id, source: 1 })),
+    ...items2.map(({ url, id }) => ({ url, id, source: 2 })),
   ]
 }
 
-export async function checkUrl(url, timeoutMs, scanSignal) {
+// Fetch brand name for a given ID from the API endpoint.
+// Returns '' on any failure so it never breaks the scan.
+async function fetchBrand(apiEndpoint, id, signal) {
+  if (!apiEndpoint || !id) return ''
+  try {
+    const res = await fetch(apiEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ id }),
+      signal,
+    })
+    if (!res.ok) {
+      console.warn(`[fetchBrand] API returned ${res.status} for id=${id}`)
+      return ''
+    }
+    const data = await res.json()
+    return (Array.isArray(data) && data[0]?.brandName) ? String(data[0].brandName) : ''
+  } catch (err) {
+    console.warn('[fetchBrand] fetch failed:', err)
+    return ''
+  }
+}
+
+export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
   if (scanSignal.aborted) {
-    return makeResult(url, 0, 'Cancelled', 'failed', 0)
+    return { ...makeResult(url, 0, 'Cancelled', 'failed', 0), brand: '' }
   }
 
   const timeoutController = new AbortController()
@@ -70,19 +92,38 @@ export async function checkUrl(url, timeoutMs, scanSignal) {
   scanSignal.addEventListener('abort', onScanAbort, { once: true })
 
   const startTime = performance.now()
+  let headResponseTime = 0
 
   try {
-    const response = await fetch(url, {
-      method: 'HEAD',
-      signal: timeoutController.signal,
-      redirect: 'follow',
-    })
-    const responseTime = Math.round(performance.now() - startTime)
+    // Run HEAD check and brand fetch concurrently
+    const [headSettled, brandSettled] = await Promise.allSettled([
+      fetch(url, { method: 'HEAD', signal: timeoutController.signal, redirect: 'follow' })
+        .then((r) => { headResponseTime = Math.round(performance.now() - startTime); return r }),
+      fetchBrand(apiEndpoint, id, timeoutController.signal),
+    ])
+
+    const brand = brandSettled.status === 'fulfilled' ? brandSettled.value : ''
+    const responseTime = headResponseTime || Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
 
+    if (headSettled.status === 'rejected') {
+      const isTimeout = timeoutController.signal.aborted && !scanSignal.aborted
+      if (!isTimeout && !scanSignal.aborted) {
+        console.error('[checkUrl] HEAD request failed:', url, headSettled.reason)
+      }
+      return {
+        ...makeResult(url, 0,
+          isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error',
+          isTimeout ? 'timeout' : 'failed',
+          responseTime),
+        brand,
+      }
+    }
+
+    const response = headSettled.value
     if (response.status === 405 || response.status >= 500) {
-      return await checkUrlGet(url, timeoutMs, scanSignal)
+      return await checkUrlGet(url, timeoutMs, scanSignal, brand)
     }
 
     const group = getStatusGroup(response.status, response.redirected)
@@ -96,23 +137,27 @@ export async function checkUrl(url, timeoutMs, scanSignal) {
       responseTime,
       checkedAt: Date.now(),
       finalUrl,
+      brand,
     }
-  } catch {
-    const responseTime = Math.round(performance.now() - startTime)
+  } catch (err) {
+    const responseTime = headResponseTime || Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
+    console.error('[checkUrl] Unexpected error:', url, err)
 
     const isTimeout = timeoutController.signal.aborted && !scanSignal.aborted
-    return makeResult(
-      url, 0,
-      isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error',
-      isTimeout ? 'timeout' : 'failed',
-      responseTime
-    )
+    return {
+      ...makeResult(url, 0,
+        isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error',
+        isTimeout ? 'timeout' : 'failed',
+        responseTime),
+      brand: '',
+    }
   }
 }
 
-async function checkUrlGet(url, timeoutMs, scanSignal) {
+// Fallback GET check. brand is pre-fetched by checkUrl so we don't fetch it again.
+async function checkUrlGet(url, timeoutMs, scanSignal, brand = '') {
   const timeoutController = new AbortController()
   const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs)
   const onScanAbort = () => timeoutController.abort()
@@ -140,13 +185,23 @@ async function checkUrlGet(url, timeoutMs, scanSignal) {
       responseTime,
       checkedAt: Date.now(),
       finalUrl,
+      brand,
     }
-  } catch {
+  } catch (err) {
     const responseTime = Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
     const isTimeout = timeoutController.signal.aborted && !scanSignal.aborted
-    return makeResult(url, 0, isTimeout ? 'Timeout' : 'Network Error', isTimeout ? 'timeout' : 'failed', responseTime)
+    if (!isTimeout && !scanSignal.aborted) {
+      console.error('[checkUrlGet] GET request failed:', url, err)
+    }
+    return {
+      ...makeResult(url, 0,
+        isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error',
+        isTimeout ? 'timeout' : 'failed',
+        responseTime),
+      brand,
+    }
   }
 }
 
@@ -182,13 +237,15 @@ function defaultStatusText(code) {
 }
 
 export function exportToCsv(results) {
-  const header = ['URL', 'Device Type', 'Product Type', 'Status Code', 'Status Text', 'Group', 'Response Time (ms)', 'Final URL', 'Checked At']
+  const header = ['URL', 'ID', 'Device Type', 'Product Type', 'Brand', 'Status Code', 'Status Text', 'Group', 'Response Time (ms)', 'Final URL', 'Checked At']
   const rows = results.map((r) => [
     r.url,
+    r.id ?? '',
     r.deviceType ?? '',
     r.productType ?? '',
+    r.brand ?? '',
     String(r.statusCode || ''),
-    r.statusText,
+    r.statusText ?? '',
     r.group,
     String(r.responseTime),
     r.finalUrl ?? '',
@@ -196,7 +253,7 @@ export function exportToCsv(results) {
   ])
 
   const csv = [header, ...rows]
-    .map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(','))
+    .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
     .join('\n')
 
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })

@@ -79,8 +79,9 @@ export function useScan() {
 
       if (signal.aborted) return
 
-      const enriched = tagged.map(({ url, source }) => ({
+      const enriched = tagged.map(({ url, id, source }) => ({
         url,
+        id,
         deviceType: source === 1 ? 'devices' : 'accy',
         productType: firstPathSegment(url),
       }))
@@ -94,9 +95,9 @@ export function useScan() {
       await runConcurrent(
         enriched,
         settings.concurrency,
-        ({ url }) => checkUrl(url, settings.timeoutMs, signal),
-        (result, { deviceType, productType }) => {
-          resultsRef.current.push({ ...result, deviceType, productType })
+        ({ url, id }) => checkUrl(url, settings.timeoutMs, signal, settings.apiEndpoint, id),
+        (result, { id, deviceType, productType }) => {
+          resultsRef.current.push({ ...result, id, deviceType, productType })
         },
         signal
       )
@@ -135,7 +136,7 @@ export function useScan() {
   const recheckFailed = useCallback(async (settings) => {
     const failedItems = state.results
       .filter((r) => r.group === 'failed' || r.group === 'timeout')
-      .map((r) => ({ url: r.url, deviceType: r.deviceType ?? '', productType: r.productType ?? '' }))
+      .map((r) => ({ url: r.url, id: r.id ?? '', deviceType: r.deviceType ?? '', productType: r.productType ?? '' }))
 
     if (failedItems.length === 0) return
 
@@ -160,9 +161,9 @@ export function useScan() {
       await runConcurrent(
         failedItems,
         settings.concurrency,
-        ({ url }) => checkUrl(url, settings.timeoutMs, signal),
-        (result, { deviceType, productType }) => {
-          resultsRef.current.push({ ...result, deviceType, productType })
+        ({ url, id }) => checkUrl(url, settings.timeoutMs, signal, settings.apiEndpoint, id),
+        (result, { id, deviceType, productType }) => {
+          resultsRef.current.push({ ...result, id, deviceType, productType })
         },
         signal
       )
