@@ -182,8 +182,11 @@ async function checkUrlGet(url, timeoutMs, scanSignal, brand = '') {
       credentials: 'include',
       headers: BROWSER_HEADERS,
     })
-    // Do NOT cancel the response body — doing so shows the request as "Cancelled"
-    // in Chrome DevTools even though the status code was read successfully.
+    // Cancel the response body immediately — we only need the status code.
+    // This prevents downloading full page content (memory/bandwidth) and stops
+    // the browser processing Link: rel=preload headers from the response body.
+    // DevTools shows the body stream as "cancelled" but the status is correct.
+    response.body?.cancel().catch(() => undefined)
     const responseTime = Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
