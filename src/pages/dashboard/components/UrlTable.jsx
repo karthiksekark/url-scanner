@@ -19,13 +19,15 @@ const PAGE_SIZE_OPTIONS = [50, 100, 250, 'All']
 const DEFAULT_PAGE_SIZE = 100
 const ROW_HEIGHT = 44
 
-// '3rem 1fr 7rem 8rem 6rem 8rem 7rem 5rem'
-const GRID_COLS = '3rem 1fr 7rem 8rem 6rem 8rem 7rem 5rem'
+// '3rem 1fr 7rem 8rem 7rem 6rem 8rem 7rem 5rem'
+// # | URL | Device Type | Product Type | Brand | Status | Group | Response | Redirect
+const GRID_COLS = '3rem 1fr 7rem 8rem 7rem 6rem 8rem 7rem 5rem'
 
 const COLUMN_DEFS = [
   { id: 'url',          label: 'URL',          sortable: true,  filterable: true,  getValue: (r) => pageName(r.url) },
   { id: 'deviceType',   label: 'Device Type',  sortable: true,  filterable: true,  getValue: (r) => r.deviceType ?? '' },
   { id: 'productType',  label: 'Product Type', sortable: true,  filterable: true,  getValue: (r) => r.productType ?? '' },
+  { id: 'brand',        label: 'Brand',        sortable: true,  filterable: true,  getValue: (r) => r.brand ?? '' },
   { id: 'statusCode',   label: 'Status',       sortable: true,  filterable: true,  getValue: (r) => String(r.statusCode || '') },
   { id: 'group',        label: 'Group',        sortable: true,  filterable: true,  getValue: (r) => GROUP_BADGE[r.group]?.label ?? r.group },
   { id: 'responseTime', label: 'Response',     sortable: true,  filterable: false, getValue: (r) => r.responseTime },
@@ -417,6 +419,11 @@ export function UrlTable({ results }) {
                 {/* Product Type */}
                 <div className="px-3 flex items-center">
                   <span className="text-xs text-gray-600 truncate">{result.productType ?? ''}</span>
+                </div>
+
+                {/* Brand */}
+                <div className="px-3 flex items-center">
+                  <span className="text-xs text-gray-600 truncate">{result.brand ?? ''}</span>
                 </div>
 
                 {/* Status code */}

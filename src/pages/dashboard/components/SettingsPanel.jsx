@@ -142,12 +142,22 @@ export function SettingsPanel({ settings, onSave }) {
         <h2 className="text-base font-semibold text-gray-900 mb-4 pb-2 border-b">API Configuration</h2>
         <div className="space-y-5">
 
-          <Field label="API Endpoint URL" hint="Same URL is used for both requests">
+          <Field label="API Endpoint URL" hint="Used for both URL-fetch requests and the per-URL brand lookup">
             <input
               type="url"
               value={form.apiEndpoint}
               onChange={(e) => update('apiEndpoint', e.target.value)}
               placeholder="https://api.example.com/urls"
+              className={inputCls}
+            />
+          </Field>
+
+          <Field label="Site base URL" hint="Prepended to each path key from the API response to build the full URL (e.g. https://example.com)">
+            <input
+              type="url"
+              value={form.siteBaseUrl}
+              onChange={(e) => update('siteBaseUrl', e.target.value)}
+              placeholder="https://example.com"
               className={inputCls}
             />
           </Field>

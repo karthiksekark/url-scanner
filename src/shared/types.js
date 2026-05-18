@@ -1,5 +1,6 @@
 export const DEFAULT_SETTINGS = {
   apiEndpoint: '',
+  siteBaseUrl: '',
   method: 'POST',
   payload1: '{}',
   payload2: '{}',
