@@ -182,7 +182,8 @@ async function checkUrlGet(url, timeoutMs, scanSignal, brand = '') {
       credentials: 'include',
       headers: BROWSER_HEADERS,
     })
-    response.body?.cancel().catch(() => undefined)
+    // Do NOT cancel the response body — doing so shows the request as "Cancelled"
+    // in Chrome DevTools even though the status code was read successfully.
     const responseTime = Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
