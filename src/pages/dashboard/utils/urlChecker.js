@@ -1,11 +1,18 @@
 import { getStatusGroup } from '../../../shared/types.js'
+import { getBrandCacheMap, saveBrandCacheEntries } from '../../../shared/db.js'
 
 // Headers that make requests look like real browser navigation.
-// Some servers/CDNs return different responses for requests missing Accept.
 const BROWSER_HEADERS = {
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.5',
 }
+
+// HEAD status codes that reliably indicate the server doesn't support HEAD —
+// fall back to GET only for these. All others (including 404) are trusted as-is.
+const HEAD_FALLBACK_CODES = new Set([405, 429, 503])
+
+const BRAND_BATCH_SIZE = 50
+const RETRY_DELAY_MS = 1000
 
 async function singleRequest(settings, payload, signal) {
   const headers = { 'Content-Type': 'application/json' }
@@ -35,8 +42,6 @@ async function singleRequest(settings, payload, signal) {
   }
 
   const data = await response.json()
-
-  // Response is { "/path": "id", ... }
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     throw new Error('Expected API response to be an object mapping URL paths to IDs.')
   }
@@ -58,64 +63,155 @@ export async function fetchAllUrls(settings, signal, onFetched) {
     onFetched?.(items1.length + items2.length)
   }
 
-  return [
+  // Deduplicate by URL — first occurrence wins
+  const seen = new Set()
+  const all = [
     ...items1.map(({ url, id }) => ({ url, id, source: 1 })),
     ...items2.map(({ url, id }) => ({ url, id, source: 2 })),
   ]
+  return all.filter(({ url }) => {
+    if (seen.has(url)) return false
+    seen.add(url)
+    return true
+  })
 }
 
-// Fetch enriched data for a given ID from the brand API.
-// Returns an object with all brand fields, or null on any failure.
-async function fetchBrand(apiEndpoint, id, signal) {
-  if (!apiEndpoint || !id) return null
+// ── Brand API (batch) ─────────────────────────────────────────────────────────
+
+async function fetchBrandBatch(apiEndpoint, ids, signal) {
+  if (!apiEndpoint || ids.length === 0) return new Map()
   try {
     const res = await fetch(apiEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ id }),
+      body: JSON.stringify({ ids }),
       signal,
     })
     if (!res.ok) {
-      console.warn(`[fetchBrand] API returned ${res.status} for id=${id}`)
-      return null
+      console.warn(`[fetchBrandBatch] API returned ${res.status} for batch of ${ids.length}`)
+      return new Map()
     }
     const data = await res.json()
-    if (!Array.isArray(data) || !data[0]) return null
-    const item = data[0]
-    return {
-      brand: item.brandName ? String(item.brandName) : '',
-      displayUrl: item.url ? String(item.url) : '',
-      link: item.link ? String(item.link) : '',
-      deviceType: item.deviceType ? String(item.deviceType) : '',
-      productType: item.productType ? String(item.productType) : '',
-      deviceId: item.deviceId ? String(item.deviceId) : '',
+    if (!Array.isArray(data)) return new Map()
+    const result = new Map()
+    for (const item of data) {
+      if (!item?.id) continue
+      result.set(String(item.id), normalizeBrandItem(item))
     }
+    return result
   } catch (err) {
-    console.warn('[fetchBrand] fetch failed:', err)
-    return null
+    if (!signal?.aborted) console.warn('[fetchBrandBatch] fetch failed:', err)
+    return new Map()
   }
 }
 
-// Spread brand API fields onto a result object, leaving existing values as fallbacks.
+function normalizeBrandItem(item) {
+  return {
+    brand:       item.brandName   ? String(item.brandName)   : '',
+    displayUrl:  item.url         ? String(item.url)         : '',
+    link:        item.link        ? String(item.link)        : '',
+    deviceType:  item.deviceType  ? String(item.deviceType)  : '',
+    productType: item.productType ? String(item.productType) : '',
+    deviceId:    item.deviceId    ? String(item.deviceId)    : '',
+    eolType:     item.eolType     ? String(item.eolType)     : '',
+  }
+}
+
+// Pre-fetch all brand data for a list of items, using IndexedDB cache (TTL 24h).
+// Returns Map<id, brandData>. Never throws — failures return partial data.
+export async function prefetchBrandData(apiEndpoint, items, signal, onProgress) {
+  if (!apiEndpoint) return new Map()
+
+  const ids = [...new Set(items.map((i) => i.id).filter(Boolean))]
+  if (ids.length === 0) return new Map()
+
+  // Load what we can from cache
+  let cached = new Map()
+  try {
+    cached = await getBrandCacheMap(ids)
+  } catch (err) {
+    console.warn('[prefetchBrandData] cache read failed:', err)
+  }
+
+  const uncachedIds = ids.filter((id) => !cached.has(id))
+  const freshEntries = []
+
+  for (let i = 0; i < uncachedIds.length; i += BRAND_BATCH_SIZE) {
+    if (signal?.aborted) break
+    const batch = uncachedIds.slice(i, i + BRAND_BATCH_SIZE)
+    const batchResult = await fetchBrandBatch(apiEndpoint, batch, signal)
+    for (const [id, data] of batchResult) {
+      cached.set(id, data)
+      freshEntries.push({ id, ...data })
+    }
+    onProgress?.(Math.min(i + BRAND_BATCH_SIZE, uncachedIds.length), uncachedIds.length)
+  }
+
+  // Persist newly fetched entries to cache
+  if (freshEntries.length > 0) {
+    saveBrandCacheEntries(freshEntries).catch((err) =>
+      console.warn('[prefetchBrandData] cache write failed:', err)
+    )
+  }
+
+  return cached
+}
+
+// ── HTTP Checking ─────────────────────────────────────────────────────────────
+
 function applyBrandData(result, brandData) {
   if (!brandData) return result
   return {
     ...result,
-    brand: brandData.brand || result.brand || '',
-    displayUrl: brandData.displayUrl || result.displayUrl || '',
-    link: brandData.link || result.link || '',
-    deviceType: brandData.deviceType || result.deviceType || '',
+    brand:       brandData.brand       || result.brand       || '',
+    displayUrl:  brandData.displayUrl  || result.displayUrl  || '',
+    link:        brandData.link        || result.link        || '',
+    deviceType:  brandData.deviceType  || result.deviceType  || '',
     productType: brandData.productType || result.productType || '',
-    deviceId: brandData.deviceId || result.deviceId || '',
+    deviceId:    brandData.deviceId    || result.deviceId    || '',
+    eolType:     brandData.eolType     || result.eolType     || '',
   }
 }
 
-export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
+function makeResult(url, statusCode, statusText, group, responseTime, errorReason) {
+  return {
+    url, statusCode, statusText, group, responseTime,
+    checkedAt: Date.now(),
+    brand: '', displayUrl: '', link: '', deviceType: '', productType: '', deviceId: '', eolType: '',
+    ...(errorReason ? { errorReason } : {}),
+  }
+}
+
+function classifyError(err, timeoutAborted, scanAborted) {
+  if (scanAborted) return { text: 'Cancelled', reason: 'cancelled' }
+  if (timeoutAborted) return { text: 'Timeout', reason: 'timeout' }
+  const msg = err?.message ?? ''
+  if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) return { text: 'Network Error', reason: 'network' }
+  if (msg.includes('CORS') || msg.includes('cors')) return { text: 'CORS Error', reason: 'cors' }
+  if (msg.includes('SSL') || msg.includes('certificate')) return { text: 'SSL Error', reason: 'ssl' }
+  return { text: 'Network Error', reason: 'network' }
+}
+
+// checkUrl: brandData is pre-fetched and passed in — no API call inside.
+export async function checkUrl(url, timeoutMs, scanSignal, brandData = null) {
   if (scanSignal.aborted) {
-    return { ...makeResult(url, 0, 'Cancelled', 'failed', 0), brand: '', displayUrl: '', link: '', deviceType: '', productType: '', deviceId: '' }
+    return applyBrandData(makeResult(url, 0, 'Cancelled', 'failed', 0, 'cancelled'), brandData)
   }
 
+  // Retry up to 2 extra times on transient network/timeout failures
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    const result = await attemptCheck(url, timeoutMs, scanSignal, brandData)
+    if (result._retryable && attempt < 2 && !scanSignal.aborted) {
+      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)))
+      continue
+    }
+    const { _retryable, ...clean } = result
+    return clean
+  }
+}
+
+async function attemptCheck(url, timeoutMs, scanSignal, brandData) {
   const timeoutController = new AbortController()
   const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs)
   const onScanAbort = () => timeoutController.abort()
@@ -125,71 +221,56 @@ export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
   let headResponseTime = 0
 
   try {
-    // Run HEAD check and brand fetch concurrently
-    const [headSettled, brandSettled] = await Promise.allSettled([
-      fetch(url, { method: 'HEAD', signal: timeoutController.signal, redirect: 'follow', credentials: 'include', headers: BROWSER_HEADERS })
-        .then((r) => { headResponseTime = Math.round(performance.now() - startTime); return r }),
-      fetchBrand(apiEndpoint, id, timeoutController.signal),
-    ])
-
-    const brandData = brandSettled.status === 'fulfilled' ? brandSettled.value : null
-    const responseTime = headResponseTime || Math.round(performance.now() - startTime)
+    const headResponse = await fetch(url, {
+      method: 'HEAD',
+      signal: timeoutController.signal,
+      redirect: 'follow',
+      credentials: 'include',
+      headers: BROWSER_HEADERS,
+    })
+    headResponseTime = Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
 
-    if (headSettled.status === 'rejected') {
-      const isTimeout = timeoutController.signal.aborted && !scanSignal.aborted
-      if (!isTimeout && !scanSignal.aborted) {
-        console.error('[checkUrl] HEAD request failed:', url, headSettled.reason)
-      }
-      return applyBrandData(
-        makeResult(url, 0,
-          isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error',
-          isTimeout ? 'timeout' : 'failed',
-          responseTime),
-        brandData
-      )
+    // Only fall back to GET for codes where HEAD is known unreliable
+    if (HEAD_FALLBACK_CODES.has(headResponse.status)) {
+      return await attemptGet(url, timeoutMs, scanSignal, brandData, headResponseTime)
     }
 
-    const response = headSettled.value
-    // Fall back to GET for any non-success HEAD response.
-    // HEAD is unreliable on many servers: 4XX and 5XX from HEAD often don't
-    // reflect the real page status — GET is the authoritative check.
-    if (response.status < 200 || response.status >= 400) {
-      return await checkUrlGet(url, timeoutMs, scanSignal, brandData)
-    }
-
-    const group = getStatusGroup(response.status, response.redirected)
-    const finalUrl = response.redirected && response.url !== url ? response.url : undefined
+    const group = getStatusGroup(headResponse.status, headResponse.redirected)
+    const finalUrl = headResponse.redirected && headResponse.url !== url ? headResponse.url : undefined
 
     return applyBrandData({
       url,
-      statusCode: response.status,
-      statusText: response.statusText || defaultStatusText(response.status),
+      statusCode: headResponse.status,
+      statusText: headResponse.statusText || defaultStatusText(headResponse.status),
       group,
-      responseTime,
+      responseTime: headResponseTime,
       checkedAt: Date.now(),
       finalUrl,
     }, brandData)
+
   } catch (err) {
     const responseTime = headResponseTime || Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
-    console.error('[checkUrl] Unexpected error:', url, err)
 
-    const isTimeout = timeoutController.signal.aborted && !scanSignal.aborted
-    return applyBrandData(
-      makeResult(url, 0,
-        isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error',
-        isTimeout ? 'timeout' : 'failed',
-        responseTime),
-      null
-    )
+    const timeoutAborted = timeoutController.signal.aborted && !scanSignal.aborted
+    const { text, reason } = classifyError(err, timeoutAborted, scanSignal.aborted)
+    const group = timeoutAborted ? 'timeout' : 'failed'
+
+    if (!timeoutAborted && !scanSignal.aborted) {
+      console.warn('[checkUrl] HEAD failed:', url, reason, err?.message)
+    }
+
+    const result = applyBrandData(makeResult(url, 0, text, group, responseTime, reason), brandData)
+    // Mark as retryable for network errors and timeouts (not cancellations)
+    result._retryable = reason === 'network' || reason === 'timeout'
+    return result
   }
 }
 
-// Fallback GET check. brandData is pre-fetched by checkUrl so we don't fetch it again.
-async function checkUrlGet(url, timeoutMs, scanSignal, brandData = null) {
+async function attemptGet(url, timeoutMs, scanSignal, brandData, priorResponseTime) {
   const timeoutController = new AbortController()
   const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs)
   const onScanAbort = () => timeoutController.abort()
@@ -204,10 +285,7 @@ async function checkUrlGet(url, timeoutMs, scanSignal, brandData = null) {
       credentials: 'include',
       headers: BROWSER_HEADERS,
     })
-    // Cancel the response body immediately — we only need the status code.
-    // This prevents downloading full page content (memory/bandwidth) and stops
-    // the browser processing Link: rel=preload headers from the response body.
-    // DevTools shows the body stream as "cancelled" but the status is correct.
+    // Cancel body immediately — status is all we need.
     response.body?.cancel().catch(() => undefined)
     const responseTime = Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
@@ -228,19 +306,18 @@ async function checkUrlGet(url, timeoutMs, scanSignal, brandData = null) {
     const responseTime = Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
-    const isTimeout = timeoutController.signal.aborted && !scanSignal.aborted
-    if (!isTimeout && !scanSignal.aborted) {
-      console.error('[checkUrlGet] GET request failed:', url, err)
-    }
-    return applyBrandData(
-      makeResult(url, 0,
-        isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error',
-        isTimeout ? 'timeout' : 'failed',
-        responseTime),
+    const timeoutAborted = timeoutController.signal.aborted && !scanSignal.aborted
+    const { text, reason } = classifyError(err, timeoutAborted, scanSignal.aborted)
+    const result = applyBrandData(
+      makeResult(url, 0, text, timeoutAborted ? 'timeout' : 'failed', responseTime || priorResponseTime, reason),
       brandData
     )
+    result._retryable = reason === 'network' || reason === 'timeout'
+    return result
   }
 }
+
+// ── Concurrency ───────────────────────────────────────────────────────────────
 
 export async function runConcurrent(items, concurrency, fn, onResult, signal) {
   let idx = 0
@@ -258,12 +335,7 @@ export async function runConcurrent(items, concurrency, fn, onResult, signal) {
   await Promise.all(workers)
 }
 
-function makeResult(url, statusCode, statusText, group, responseTime) {
-  return {
-    url, statusCode, statusText, group, responseTime, checkedAt: Date.now(),
-    brand: '', displayUrl: '', link: '', deviceType: '', productType: '', deviceId: '',
-  }
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function defaultStatusText(code) {
   const map = {
@@ -276,8 +348,15 @@ function defaultStatusText(code) {
   return map[code] ?? String(code)
 }
 
+// ── CSV Export ────────────────────────────────────────────────────────────────
+
 export function exportToCsv(results) {
-  const header = ['URL', 'Display URL', 'Link', 'ID', 'Device ID', 'Device Type', 'Product Type', 'Brand', 'Status Code', 'Status Text', 'Group', 'Response Time (ms)', 'Final URL', 'Checked At']
+  const header = [
+    'URL', 'Display URL', 'Link', 'ID', 'Device ID',
+    'Device Type', 'Product Type', 'Brand', 'EOL Type',
+    'Status Code', 'Status Text', 'Group', 'Response Time (ms)',
+    'Final URL', 'Checked At', 'URL State', 'Error Reason',
+  ]
   const rows = results.map((r) => [
     r.url,
     r.displayUrl ?? '',
@@ -287,12 +366,15 @@ export function exportToCsv(results) {
     r.deviceType ?? '',
     r.productType ?? '',
     r.brand ?? '',
+    r.eolType ?? '',
     String(r.statusCode || ''),
     r.statusText ?? '',
     r.group,
     String(r.responseTime),
     r.finalUrl ?? '',
-    new Date(r.checkedAt).toISOString(),
+    r.checkedAt ? new Date(r.checkedAt).toISOString() : '',
+    r.urlState ?? '',
+    r.errorReason ?? '',
   ])
 
   const csv = [header, ...rows]

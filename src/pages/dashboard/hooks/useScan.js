@@ -5,13 +5,14 @@ import {
   getAllResults, saveResults,
   getMeta, setMeta,
   getAllUrlList, saveUrlList,
+  appendScanHistory, getScanHistory,
 } from '../../../shared/db.js'
 import { pullFromSheets, pushToSheets } from '../../../shared/sheetsSync.js'
-import { fetchAllUrls, checkUrl, runConcurrent } from '../utils/urlChecker.js'
+import { fetchAllUrls, checkUrl, runConcurrent, prefetchBrandData } from '../utils/urlChecker.js'
 
 const INITIAL_STATE = {
   status: 'idle',
-  progress: { total: 0, completed: 0 },
+  progress: { total: 0, completed: 0, brandsFetched: 0, brandsTotal: 0 },
   results: [],
   summary: EMPTY_SUMMARY,
   lastScannedAt: null,
@@ -19,6 +20,9 @@ const INITIAL_STATE = {
   sheetsSyncing: false,
   sheetsLastSyncAt: null,
   error: undefined,
+  delta: null,          // { newFailures, recovered, newUrls } — shown after scan
+  scanHistory: [],      // last 5 scan records
+  isPartial: false,     // true if last scan was stopped early
 }
 
 const BATCH_INTERVAL_MS = 250
@@ -32,7 +36,6 @@ function firstPathSegment(url) {
   }
 }
 
-// Keep the more recently checked result per URL when merging local + Sheets
 function mergeResults(local, remote) {
   const map = new Map(local.map((r) => [r.url, r]))
   for (const r of remote) {
@@ -42,6 +45,25 @@ function mergeResults(local, remote) {
     }
   }
   return [...map.values()]
+}
+
+// Compute what changed between two result sets (prev → next).
+function computeDelta(prevResults, nextResults) {
+  const prevMap = new Map(prevResults.map((r) => [r.url, r]))
+  const delta = { newFailures: [], recovered: [], newUrls: [] }
+  const failed = new Set(['failed', 'timeout'])
+
+  for (const r of nextResults) {
+    const prev = prevMap.get(r.url)
+    if (!prev) {
+      delta.newUrls.push({ url: r.url, group: r.group })
+    } else if (!failed.has(prev.group) && failed.has(r.group)) {
+      delta.newFailures.push({ url: r.url, group: r.group, statusCode: r.statusCode, errorReason: r.errorReason })
+    } else if (failed.has(prev.group) && !failed.has(r.group)) {
+      delta.recovered.push({ url: r.url, group: r.group, statusCode: r.statusCode })
+    }
+  }
+  return delta
 }
 
 async function migrateIfNeeded() {
@@ -56,12 +78,11 @@ async function migrateIfNeeded() {
   }
 }
 
-// Non-blocking Sheets push — never throws, surfaces errors via callbacks
-async function pushToSheetsQuiet(sheetsId, results, onStart, onDone) {
+async function pushToSheetsQuiet(sheetsId, results, tabName, onStart, onDone) {
   if (!sheetsId) return
   onStart?.()
   try {
-    await pushToSheets(sheetsId, results)
+    await pushToSheets(sheetsId, results, tabName)
     const syncAt = Date.now()
     await setMeta('sheetsLastSyncAt', syncAt)
     onDone?.(syncAt, null)
@@ -74,12 +95,13 @@ async function pushToSheetsQuiet(sheetsId, results, onStart, onDone) {
 export function useScan() {
   const [state, setState] = useState(INITIAL_STATE)
   const abortRef = useRef(null)
-  const resultsRef = useRef([])
+  // Results stored as Map<url, result> during scan for O(1) updates
+  const resultsMapRef = useRef(new Map())
   const batchTimerRef = useRef(null)
   const scanGenRef = useRef(0)
 
   const flushBatch = useCallback(() => {
-    const results = [...resultsRef.current]
+    const results = [...resultsMapRef.current.values()]
     setState((prev) => ({
       ...prev,
       results,
@@ -88,7 +110,6 @@ export function useScan() {
     }))
   }, [])
 
-  // Load cached results from IndexedDB; pull from Sheets in background if configured
   const loadFromStorage = useCallback(async (settings) => {
     await migrateIfNeeded()
     setState((prev) => ({ ...prev, status: 'loading' }))
@@ -97,10 +118,11 @@ export function useScan() {
     const thresholdMs = (settings.stalenessHours ?? 4) * 3600000
 
     let results = await getAllResults()
-    const [urlListFetchedAt, sheetsLastSyncAt, lastScannedAt] = await Promise.all([
+    const [urlListFetchedAt, sheetsLastSyncAt, lastScannedAt, history] = await Promise.all([
       getMeta('urlListFetchedAt'),
       getMeta('sheetsLastSyncAt'),
       getMeta('lastScannedAt'),
+      getScanHistory(),
     ])
 
     results = results.map((r) => ({ ...r, urlState: computeUrlState(r, now, thresholdMs) }))
@@ -108,19 +130,20 @@ export function useScan() {
     setState({
       ...INITIAL_STATE,
       status: results.length > 0 ? 'complete' : 'idle',
-      progress: { total: results.length, completed: results.length },
+      progress: { total: results.length, completed: results.length, brandsFetched: 0, brandsTotal: 0 },
       results,
       summary: computeSummary(results),
       lastScannedAt: lastScannedAt ?? null,
       urlListFetchedAt: urlListFetchedAt ?? null,
       sheetsLastSyncAt: sheetsLastSyncAt ?? null,
+      scanHistory: history,
     })
 
     if (!settings.sheetsId) return
 
     setState((prev) => ({ ...prev, sheetsSyncing: true }))
     try {
-      const sheetsResults = await pullFromSheets(settings.sheetsId)
+      const sheetsResults = await pullFromSheets(settings.sheetsId, settings.sheetsTabName)
       const merged = mergeResults(results, sheetsResults).map((r) => ({
         ...r,
         urlState: computeUrlState(r, Date.now(), thresholdMs),
@@ -136,12 +159,16 @@ export function useScan() {
         sheetsLastSyncAt: syncAt,
       }))
     } catch (err) {
+      const isAuthExpired = err.message === 'AUTH_EXPIRED'
       console.warn('[sheetsSync] pull failed:', err.message)
-      setState((prev) => ({ ...prev, sheetsSyncing: false }))
+      setState((prev) => ({
+        ...prev,
+        sheetsSyncing: false,
+        sheetsAuthExpired: isAuthExpired,
+      }))
     }
   }, [])
 
-  // Fetch URL list from API, diff against stored list, update display — no scan
   const refreshUrlList = useCallback(async (settings) => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
@@ -150,13 +177,13 @@ export function useScan() {
     setState((prev) => ({
       ...prev,
       status: 'fetching_urls',
-      progress: { total: 0, completed: 0 },
+      progress: { total: 0, completed: 0, brandsFetched: 0, brandsTotal: 0 },
       error: undefined,
     }))
 
     try {
       const tagged = await fetchAllUrls(settings, signal, (count) => {
-        setState((prev) => ({ ...prev, progress: { total: count, completed: 0 } }))
+        setState((prev) => ({ ...prev, progress: { ...prev.progress, total: count } }))
       })
 
       if (signal.aborted) return
@@ -169,27 +196,25 @@ export function useScan() {
       const oldUrlSet = new Set(oldUrlList.map((u) => u.url))
       const resultMap = new Map(currentResults.map((r) => [r.url, r]))
 
-      // URLs new to the list that have no stored result → create pending placeholder
       for (const { url, id, source } of tagged) {
         if (!oldUrlSet.has(url) && !resultMap.has(url)) {
           resultMap.set(url, {
-            url, id,
+            url, id, eolType: '',
             deviceType: source === 1 ? 'devices' : 'accy',
             productType: firstPathSegment(url),
-            brand: '', statusCode: 0, statusText: '',
+            brand: '', displayUrl: '', link: '', deviceId: '',
+            statusCode: 0, statusText: '',
             group: 'pending', responseTime: 0, checkedAt: 0, urlState: 'new',
           })
         }
       }
 
-      // URLs that disappeared from the list → mark removed
       for (const { url } of oldUrlList) {
         if (!newUrlSet.has(url) && resultMap.has(url)) {
           resultMap.set(url, { ...resultMap.get(url), urlState: 'removed' })
         }
       }
 
-      // Recompute staleness for URLs that are still in the list
       for (const { url } of tagged) {
         const r = resultMap.get(url)
         if (r && r.urlState !== 'new') {
@@ -213,7 +238,7 @@ export function useScan() {
       setState((prev) => ({
         ...prev,
         status: 'complete',
-        progress: { total: finalResults.length, completed: finalResults.length },
+        progress: { total: finalResults.length, completed: finalResults.length, brandsFetched: 0, brandsTotal: 0 },
         results: finalResults,
         summary: computeSummary(finalResults),
         urlListFetchedAt: now,
@@ -228,13 +253,13 @@ export function useScan() {
     }
   }, [])
 
-  // Full scan: fetch fresh URL list + scan every URL
   const startScan = useCallback(async (settings) => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    resultsRef.current = []
+    resultsMapRef.current = new Map()
     const scanGen = ++scanGenRef.current
     const signal = abortRef.current.signal
+    const startedAt = Date.now()
 
     if (batchTimerRef.current) clearInterval(batchTimerRef.current)
     batchTimerRef.current = setInterval(flushBatch, BATCH_INTERVAL_MS)
@@ -245,13 +270,16 @@ export function useScan() {
       sheetsLastSyncAt: prev.sheetsLastSyncAt,
       urlListFetchedAt: prev.urlListFetchedAt,
       lastScannedAt: prev.lastScannedAt,
+      scanHistory: prev.scanHistory,
     }))
+
+    // Load previous results before scan so we can compute delta afterward
+    const prevResults = await getAllResults()
 
     try {
       const tagged = await fetchAllUrls(settings, signal, (fetched) => {
-        setState((prev) => ({ ...prev, progress: { total: fetched, completed: 0 } }))
+        setState((prev) => ({ ...prev, progress: { ...prev.progress, total: fetched } }))
       })
-
       if (signal.aborted) return
 
       const now = Date.now()
@@ -262,6 +290,27 @@ export function useScan() {
       }))
       await Promise.all([saveUrlList(enrichedUrlList), setMeta('urlListFetchedAt', now)])
 
+      // Pre-fetch all brand data in batches before starting scan
+      setState((prev) => ({
+        ...prev,
+        status: 'fetching_brands',
+        progress: { ...prev.progress, brandsTotal: tagged.length, brandsFetched: 0 },
+      }))
+
+      const brandMap = await prefetchBrandData(
+        settings.apiEndpoint,
+        tagged,
+        signal,
+        (fetched, total) => {
+          setState((prev) => ({
+            ...prev,
+            progress: { ...prev.progress, brandsFetched: fetched, brandsTotal: total },
+          }))
+        }
+      )
+
+      if (signal.aborted) return
+
       const enriched = tagged.map(({ url, id, source }) => ({
         url, id,
         deviceType: source === 1 ? 'devices' : 'accy',
@@ -271,18 +320,25 @@ export function useScan() {
       setState((prev) => ({
         ...prev,
         status: 'scanning',
-        progress: { total: enriched.length, completed: 0 },
+        progress: { total: enriched.length, completed: 0, brandsFetched: 0, brandsTotal: 0 },
         urlListFetchedAt: now,
       }))
 
       await runConcurrent(
         enriched,
         settings.concurrency,
-        ({ url, id }) => checkUrl(url, settings.timeoutMs, signal, settings.apiEndpoint, id),
+        ({ url, id, deviceType, productType }) => {
+          const brandData = brandMap.get(id) ?? null
+          return checkUrl(url, settings.timeoutMs, signal, brandData)
+        },
         (result, { id, deviceType, productType }) => {
           if (scanGenRef.current !== scanGen) return
-          // Brand API values (in result) override hardcoded fallbacks
-          resultsRef.current.push({ deviceType, productType, ...result, id, urlState: 'fresh' })
+          resultsMapRef.current.set(result.url, {
+            deviceType, productType, eolType: '',
+            ...result,
+            id,
+            urlState: 'fresh',
+          })
         },
         signal
       )
@@ -290,21 +346,46 @@ export function useScan() {
       if (batchTimerRef.current) clearInterval(batchTimerRef.current)
 
       const scannedAt = Date.now()
-      const finalResults = [...resultsRef.current]
-      await Promise.all([saveResults(finalResults), setMeta('lastScannedAt', scannedAt)])
+      const finalResults = [...resultsMapRef.current.values()]
+      const delta = computeDelta(prevResults, finalResults)
+      const summary = computeSummary(finalResults)
+
+      const historyRecord = {
+        scanId: `scan-${startedAt}`,
+        startedAt,
+        completedAt: scannedAt,
+        isPartial: signal.aborted,
+        summary,
+        delta: {
+          newFailures: delta.newFailures.slice(0, 100),
+          recovered: delta.recovered.slice(0, 100),
+          newUrls: delta.newUrls.slice(0, 100),
+        },
+      }
+
+      await Promise.all([
+        saveResults(finalResults),
+        setMeta('lastScannedAt', scannedAt),
+        appendScanHistory(historyRecord),
+      ])
+
+      const history = await getScanHistory()
 
       setState((prev) => ({
         ...prev,
         status: signal.aborted ? 'stopped' : 'complete',
-        progress: { total: enriched.length, completed: finalResults.length },
+        progress: { total: enriched.length, completed: finalResults.length, brandsFetched: 0, brandsTotal: 0 },
         results: finalResults,
-        summary: computeSummary(finalResults),
+        summary,
         lastScannedAt: scannedAt,
+        delta: signal.aborted ? null : delta,
+        scanHistory: history,
+        isPartial: signal.aborted,
       }))
 
-      if (!signal.aborted && settings.sheetsId) {
+      if (!signal.aborted && (settings.autoSyncSheets !== false) && settings.sheetsId) {
         pushToSheetsQuiet(
-          settings.sheetsId, finalResults,
+          settings.sheetsId, finalResults, settings.sheetsTabName,
           () => setState((prev) => ({ ...prev, sheetsSyncing: true })),
           (syncAt, err) => setState((prev) => ({
             ...prev,
@@ -319,6 +400,7 @@ export function useScan() {
         ...prev,
         status: signal.aborted ? 'stopped' : 'error',
         error: signal.aborted ? undefined : (err instanceof Error ? err.message : 'Unknown error'),
+        isPartial: true,
       }))
     }
   }, [flushBatch])
@@ -327,33 +409,46 @@ export function useScan() {
     abortRef.current?.abort()
     if (batchTimerRef.current) clearInterval(batchTimerRef.current)
     flushBatch()
-    setState((prev) => ({ ...prev, status: 'stopped' }))
+    setState((prev) => ({ ...prev, status: 'stopped', isPartial: true }))
   }, [flushBatch])
 
-  // Re-check only failed / timeout URLs
   const recheckFailed = useCallback(async (settings) => {
     const items = state.results
       .filter((r) => r.group === 'failed' || r.group === 'timeout')
       .map((r) => ({ url: r.url, id: r.id ?? '', deviceType: r.deviceType ?? '', productType: r.productType ?? '' }))
-
     if (items.length === 0) return
     const base = state.results.filter((r) => r.group !== 'failed' && r.group !== 'timeout')
     await runRecheck(items, base, settings)
   }, [state.results]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-check a specific set of URLs chosen by the user
   const recheckSelected = useCallback(async (selectedUrls, settings) => {
     if (selectedUrls.size === 0) return
     const items = state.results
       .filter((r) => selectedUrls.has(r.url))
       .map((r) => ({ url: r.url, id: r.id ?? '', deviceType: r.deviceType ?? '', productType: r.productType ?? '' }))
-
     if (items.length === 0) return
     const base = state.results.filter((r) => !selectedUrls.has(r.url))
     await runRecheck(items, base, settings)
   }, [state.results]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Shared scan loop for recheckFailed and recheckSelected
+  // Re-check a list of raw URLs pasted by the user
+  const recheckPasted = useCallback(async (urls, settings) => {
+    if (urls.length === 0) return
+    const urlSet = new Set(urls)
+    const resultByUrl = new Map(state.results.map((r) => [r.url, r]))
+    const items = urls.map((url) => {
+      const existing = resultByUrl.get(url)
+      return {
+        url,
+        id: existing?.id ?? '',
+        deviceType: existing?.deviceType ?? '',
+        productType: existing?.productType ?? '',
+      }
+    })
+    const base = state.results.filter((r) => !urlSet.has(r.url))
+    await runRecheck(items, base, settings)
+  }, [state.results]) // eslint-disable-line react-hooks/exhaustive-deps
+
   async function runRecheck(itemsToCheck, baseResults, settings) {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
@@ -363,43 +458,55 @@ export function useScan() {
     if (batchTimerRef.current) clearInterval(batchTimerRef.current)
     batchTimerRef.current = setInterval(flushBatch, BATCH_INTERVAL_MS)
 
-    resultsRef.current = [...baseResults]
+    resultsMapRef.current = new Map(baseResults.map((r) => [r.url, r]))
 
     setState((prev) => ({
       ...prev,
       status: 'scanning',
-      progress: { total: prev.results.length, completed: baseResults.length },
+      progress: { total: prev.results.length, completed: baseResults.length, brandsFetched: 0, brandsTotal: 0 },
+      delta: null,
     }))
+
+    // Pre-fetch brand data for items being rechecked
+    const brandMap = await prefetchBrandData(settings.apiEndpoint, itemsToCheck, signal)
 
     try {
       await runConcurrent(
         itemsToCheck,
         settings.concurrency,
-        ({ url, id }) => checkUrl(url, settings.timeoutMs, signal, settings.apiEndpoint, id),
+        ({ url, id, deviceType, productType }) => {
+          const brandData = brandMap.get(id) ?? null
+          return checkUrl(url, settings.timeoutMs, signal, brandData)
+        },
         (result, { id, deviceType, productType }) => {
           if (scanGenRef.current !== scanGen) return
-          resultsRef.current.push({ deviceType, productType, ...result, id, urlState: 'fresh' })
+          resultsMapRef.current.set(result.url, {
+            deviceType, productType, eolType: '',
+            ...result,
+            id,
+            urlState: 'fresh',
+          })
         },
         signal
       )
 
       if (batchTimerRef.current) clearInterval(batchTimerRef.current)
       const scannedAt = Date.now()
-      const finalResults = [...resultsRef.current]
+      const finalResults = [...resultsMapRef.current.values()]
       await Promise.all([saveResults(finalResults), setMeta('lastScannedAt', scannedAt)])
 
       setState((prev) => ({
         ...prev,
         status: 'complete',
-        progress: { total: finalResults.length, completed: finalResults.length },
+        progress: { total: finalResults.length, completed: finalResults.length, brandsFetched: 0, brandsTotal: 0 },
         results: finalResults,
         summary: computeSummary(finalResults),
         lastScannedAt: scannedAt,
       }))
 
-      if (!signal.aborted && settings.sheetsId) {
+      if (!signal.aborted && (settings.autoSyncSheets !== false) && settings.sheetsId) {
         pushToSheetsQuiet(
-          settings.sheetsId, finalResults,
+          settings.sheetsId, finalResults, settings.sheetsTabName,
           () => setState((prev) => ({ ...prev, sheetsSyncing: true })),
           (syncAt, err) => setState((prev) => ({
             ...prev,
@@ -415,11 +522,10 @@ export function useScan() {
     }
   }
 
-  // Manual "Sync to Sheets" — pushes current results immediately
   const syncToSheets = useCallback(async (settings) => {
     if (!settings.sheetsId || state.results.length === 0 || state.sheetsSyncing) return
     pushToSheetsQuiet(
-      settings.sheetsId, state.results,
+      settings.sheetsId, state.results, settings.sheetsTabName,
       () => setState((prev) => ({ ...prev, sheetsSyncing: true })),
       (syncAt, err) => setState((prev) => ({
         ...prev,
@@ -429,6 +535,10 @@ export function useScan() {
     )
   }, [state.results, state.sheetsSyncing]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const dismissDelta = useCallback(() => {
+    setState((prev) => ({ ...prev, delta: null }))
+  }, [])
+
   return {
     state,
     loadFromStorage,
@@ -437,6 +547,8 @@ export function useScan() {
     stopScan,
     recheckFailed,
     recheckSelected,
+    recheckPasted,
     syncToSheets,
+    dismissDelta,
   }
 }

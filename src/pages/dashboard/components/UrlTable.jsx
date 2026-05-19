@@ -26,18 +26,17 @@ const PAGE_SIZE_OPTIONS = [50, 100, 250, 'All']
 const DEFAULT_PAGE_SIZE = 100
 const ROW_HEIGHT = 44
 
-// checkbox | # | URL | Device Type | Product Type | Brand | Device ID | Status | Group | Response | Redirect
-const GRID_COLS = '2rem 3rem 1fr 7rem 8rem 7rem 8rem 6rem 8rem 7rem 5rem'
-
-const COLUMN_DEFS = [
-  { id: 'url',          label: 'URL',          sortable: true,  filterable: true,  getValue: (r) => r.displayUrl || pageName(r.url) },
-  { id: 'deviceType',   label: 'Device Type',  sortable: true,  filterable: true,  getValue: (r) => r.deviceType ?? '' },
-  { id: 'productType',  label: 'Product Type', sortable: true,  filterable: true,  getValue: (r) => r.productType ?? '' },
-  { id: 'brand',        label: 'Brand',        sortable: true,  filterable: true,  getValue: (r) => r.brand ?? '' },
-  { id: 'deviceId',     label: 'Device ID',    sortable: true,  filterable: true,  getValue: (r) => r.deviceId ?? '' },
-  { id: 'statusCode',   label: 'Status',       sortable: true,  filterable: true,  getValue: (r) => String(r.statusCode || '') },
-  { id: 'group',        label: 'Group',        sortable: true,  filterable: true,  getValue: (r) => GROUP_BADGE[r.group]?.label ?? r.group },
-  { id: 'responseTime', label: 'Response',     sortable: true,  filterable: false, getValue: (r) => r.responseTime },
+// All possible columns — visibility toggled by user
+const ALL_COLUMNS = [
+  { id: 'url',          label: 'URL',          sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => r.displayUrl || pageName(r.url) },
+  { id: 'deviceType',   label: 'Device Type',  sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => r.deviceType ?? '' },
+  { id: 'productType',  label: 'Product Type', sortable: true,  filterable: true,  defaultVisible: false, getValue: (r) => r.productType ?? '' },
+  { id: 'brand',        label: 'Brand',        sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => r.brand ?? '' },
+  { id: 'deviceId',     label: 'Device ID',    sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => r.deviceId ?? '' },
+  { id: 'eolType',      label: 'EOL',          sortable: true,  filterable: true,  defaultVisible: false, getValue: (r) => r.eolType ?? '' },
+  { id: 'statusCode',   label: 'Status',       sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => String(r.statusCode || '') },
+  { id: 'group',        label: 'Group',        sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => GROUP_BADGE[r.group]?.label ?? r.group },
+  { id: 'responseTime', label: 'Response',     sortable: true,  filterable: false, defaultVisible: true,  getValue: (r) => r.responseTime },
 ]
 
 function pageName(url) {
@@ -48,6 +47,13 @@ function pageName(url) {
   } catch {
     return url
   }
+}
+
+function responseTimeColor(ms) {
+  if (!ms || ms <= 0) return 'text-gray-400'
+  if (ms < 500) return 'text-green-600'
+  if (ms < 2000) return 'text-amber-600'
+  return 'text-red-600'
 }
 
 function SortIcon({ active, dir }) {
@@ -78,9 +84,7 @@ function HeaderCell({ col, sortField, sortDir, onSort, isFilterOpen, onToggleFil
 
   function handleKeyDown(e) {
     if (e.key === 'Escape') onToggleFilter()
-    if (e.key === 'Enter' && suggestions.length > 0 && !suggestions.includes(filterValue)) {
-      onSuggestionSelect(suggestions[0])
-    }
+    if (e.key === 'Enter' && suggestions.length > 0) onSuggestionSelect(suggestions[0])
   }
 
   return (
@@ -110,11 +114,9 @@ function HeaderCell({ col, sortField, sortDir, onSort, isFilterOpen, onToggleFil
       </div>
 
       {isFilterOpen && (
-        <div
-          ref={popoverRef}
+        <div ref={popoverRef}
           className="absolute top-full left-0 z-30 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl"
-          style={{ minWidth: 190 }}
-        >
+          style={{ minWidth: 190 }}>
           <div className="flex items-center gap-1 p-2">
             <input
               autoFocus
@@ -126,7 +128,7 @@ function HeaderCell({ col, sortField, sortDir, onSort, isFilterOpen, onToggleFil
               className="flex-1 text-sm border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             {filterValue && (
-              <button onClick={onFilterClear} className="text-gray-400 hover:text-red-500 transition-colors" title="Clear">
+              <button onClick={onFilterClear} className="text-gray-400 hover:text-red-500 transition-colors">
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -169,19 +171,16 @@ function PaginationBar({ page, totalPages, pageSize, total, onPageChange, onPage
   }
 
   const btnBase = 'px-2.5 py-1 text-sm rounded border transition-colors'
-
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
       <div className="flex items-center gap-2">
-        <span className="text-sm text-gray-500 whitespace-nowrap">Rows per page</span>
+        <span className="text-sm text-gray-500 whitespace-nowrap">Rows</span>
         <select
           value={pageSize}
           onChange={(e) => onPageSizeChange(e.target.value === 'All' ? 'All' : Number(e.target.value))}
           className="text-sm border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
         >
-          {PAGE_SIZE_OPTIONS.map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
+          {PAGE_SIZE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
       </div>
 
@@ -191,37 +190,50 @@ function PaginationBar({ page, totalPages, pageSize, total, onPageChange, onPage
 
       {totalPages > 1 && (
         <div className="flex items-center gap-1">
-          <button
-            disabled={page <= 1}
-            onClick={() => onPageChange(Math.max(1, page - 1))}
-            className={`${btnBase} border-gray-300 disabled:opacity-40 hover:bg-gray-100 disabled:cursor-not-allowed`}
-          >
-            ‹
-          </button>
+          <button disabled={page <= 1} onClick={() => onPageChange(Math.max(1, page - 1))}
+            className={`${btnBase} border-gray-300 disabled:opacity-40 hover:bg-gray-100 disabled:cursor-not-allowed`}>‹</button>
           {pageNumbers().map((p, i) =>
             typeof p === 'string' ? (
               <span key={`e${i}`} className="px-1 text-sm text-gray-400">{p}</span>
             ) : (
-              <button
-                key={p}
-                onClick={() => onPageChange(p)}
-                className={`${btnBase} ${p === page ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 hover:bg-gray-100'}`}
-              >
+              <button key={p} onClick={() => onPageChange(p)}
+                className={`${btnBase} ${p === page ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 hover:bg-gray-100'}`}>
                 {p}
               </button>
             )
           )}
-          <button
-            disabled={page >= totalPages}
-            onClick={() => onPageChange(Math.min(totalPages, page + 1))}
-            className={`${btnBase} border-gray-300 disabled:opacity-40 hover:bg-gray-100 disabled:cursor-not-allowed`}
-          >
-            ›
-          </button>
+          <button disabled={page >= totalPages} onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+            className={`${btnBase} border-gray-300 disabled:opacity-40 hover:bg-gray-100 disabled:cursor-not-allowed`}>›</button>
         </div>
       )}
     </div>
   )
+}
+
+function ColumnToggleMenu({ columns, visibleIds, onToggle, onClose }) {
+  return (
+    <div className="absolute top-full right-0 z-40 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl p-2 min-w-44">
+      {columns.map((col) => (
+        <label key={col.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={visibleIds.has(col.id)}
+            onChange={() => onToggle(col.id)}
+            className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+          />
+          <span className="text-xs text-gray-700">{col.label}</span>
+        </label>
+      ))}
+    </div>
+  )
+}
+
+function buildGridCols(visibleCols) {
+  const widths = {
+    url: '1fr', deviceType: '7rem', productType: '8rem', brand: '7rem',
+    deviceId: '8rem', eolType: '5rem', statusCode: '6rem', group: '8rem', responseTime: '7rem',
+  }
+  return ['2rem', '3rem', ...visibleCols.map((c) => widths[c.id] ?? '8rem'), '5rem'].join(' ')
 }
 
 export function UrlTable({ results, selectedUrls, onSelectionChange }) {
@@ -231,19 +243,38 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
   const [filters, setFilters] = useState({})
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
+  const [showColumnToggle, setShowColumnToggle] = useState(false)
+  const [visibleColIds, setVisibleColIds] = useState(
+    () => new Set(ALL_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.id))
+  )
   const popoverRef = useRef(null)
+  const colMenuRef = useRef(null)
+
+  const COLUMN_DEFS = useMemo(
+    () => ALL_COLUMNS.filter((c) => visibleColIds.has(c.id)),
+    [visibleColIds]
+  )
+  const GRID_COLS = useMemo(() => buildGridCols(COLUMN_DEFS), [COLUMN_DEFS])
 
   useEffect(() => {
     if (!activeFilterCol) return
     function onMouseDown(e) {
-      if (popoverRef.current && !popoverRef.current.contains(e.target)) {
-        setActiveFilterCol(null)
-      }
+      if (popoverRef.current && !popoverRef.current.contains(e.target)) setActiveFilterCol(null)
     }
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [activeFilterCol])
 
+  useEffect(() => {
+    if (!showColumnToggle) return
+    function onMouseDown(e) {
+      if (colMenuRef.current && !colMenuRef.current.contains(e.target)) setShowColumnToggle(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [showColumnToggle])
+
+  // Reset to page 1 when filters or sort change, but preserve page when only results refresh
   useEffect(() => { setPage(1) }, [filters, sortField, sortDir])
 
   const filtered = useMemo(() => {
@@ -254,11 +285,11 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
         col.getValue(r).toString().toLowerCase().includes(filters[col.id].toLowerCase())
       )
     )
-  }, [results, filters])
+  }, [results, filters, COLUMN_DEFS])
 
   const sorted = useMemo(() => {
     if (sortField === 'index') return filtered
-    const col = COLUMN_DEFS.find((c) => c.id === sortField)
+    const col = ALL_COLUMNS.find((c) => c.id === sortField)
     if (!col) return filtered
     return [...filtered].sort((a, b) => {
       const va = col.getValue(a)
@@ -272,22 +303,22 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
 
   const effectivePageSize = pageSize === 'All' ? sorted.length : pageSize
   const totalPages = Math.max(1, Math.ceil(sorted.length / (effectivePageSize || 1)))
-  const pageData = sorted.slice((page - 1) * (effectivePageSize || 1), page * (effectivePageSize || 1))
-  const pageOffset = (page - 1) * (effectivePageSize || 1)
+  const safePage = Math.min(page, totalPages)
+  const pageData = sorted.slice((safePage - 1) * (effectivePageSize || 1), safePage * (effectivePageSize || 1))
+  const pageOffset = (safePage - 1) * (effectivePageSize || 1)
 
   const suggestions = useMemo(() => {
     if (!activeFilterCol) return []
     const col = COLUMN_DEFS.find((c) => c.id === activeFilterCol)
-    if (!col) return []
+    if (!col?.filterable) return []
     const currentVal = (filters[activeFilterCol] ?? '').toLowerCase()
-    const unique = [...new Set(results.map((r) => col.getValue(r)).filter(Boolean))]
+    const unique = [...new Set(results.map((r) => col.getValue(r)).filter(Boolean).map(String))]
     return unique
-      .filter((v) => !currentVal || v.toString().toLowerCase().includes(currentVal))
-      .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }))
+      .filter((v) => !currentVal || v.toLowerCase().includes(currentVal))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       .slice(0, 10)
-  }, [activeFilterCol, filters, results])
+  }, [activeFilterCol, filters, results, COLUMN_DEFS])
 
-  // Select-all state based on ALL filtered results (not just current page)
   const allFilteredUrls = useMemo(() => new Set(sorted.map((r) => r.url)), [sorted])
   const allSelected = allFilteredUrls.size > 0 && [...allFilteredUrls].every((u) => selectedUrls.has(u))
   const someSelected = !allSelected && [...allFilteredUrls].some((u) => selectedUrls.has(u))
@@ -308,16 +339,12 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
   }, [selectedUrls, onSelectionChange])
 
   function handleSort(fieldId) {
-    if (sortField === fieldId) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    } else {
-      setSortField(fieldId)
-      setSortDir('asc')
-    }
+    if (sortField === fieldId) setSortDir((d) => d === 'asc' ? 'desc' : 'asc')
+    else { setSortField(fieldId); setSortDir('asc') }
   }
 
   function toggleFilter(colId) {
-    setActiveFilterCol((prev) => (prev === colId ? null : colId))
+    setActiveFilterCol((prev) => prev === colId ? null : colId)
   }
 
   function setFilter(colId, val) {
@@ -328,18 +355,32 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
     setFilters((prev) => { const n = { ...prev }; delete n[colId]; return n })
   }
 
+  function toggleColVisibility(colId) {
+    setVisibleColIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(colId)) { if (next.size > 1) next.delete(colId) }
+      else next.add(colId)
+      return next
+    })
+  }
+
   if (results.length === 0) {
     return (
-      <div className="flex items-center justify-center h-40 text-gray-400 text-sm border border-dashed border-gray-300 rounded-lg">
-        No results to display
+      <div className="flex flex-col items-center justify-center h-48 text-gray-400 text-sm border border-dashed border-gray-300 rounded-lg gap-2">
+        <svg className="h-8 w-8 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+        </svg>
+        <span>No results yet — run a scan to get started</span>
       </div>
     )
   }
 
+  const hasColumnFilters = Object.keys(filters).some((k) => filters[k])
+
   return (
     <div className="border border-gray-200 rounded-lg">
       {/* Active filter chips */}
-      {Object.keys(filters).some((k) => filters[k]) && (
+      {hasColumnFilters && (
         <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-blue-50 border-b border-blue-100">
           <span className="text-xs text-blue-600 font-medium">Filters:</span>
           {COLUMN_DEFS.filter((c) => filters[c.id]).map((col) => (
@@ -359,11 +400,7 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
       )}
 
       {/* Header row */}
-      <div
-        className="grid bg-gray-50 border-b border-gray-200"
-        style={{ gridTemplateColumns: GRID_COLS, position: 'relative', zIndex: 10 }}
-      >
-        {/* Select-all checkbox */}
+      <div className="grid bg-gray-50 border-b border-gray-200 relative" style={{ gridTemplateColumns: GRID_COLS, zIndex: 10 }}>
         <div className="flex items-center justify-center">
           <input
             type="checkbox"
@@ -394,16 +431,42 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
           />
         ))}
 
-        <div className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-500 flex items-center">
-          Redirect
+        {/* Redirect header + column toggle button */}
+        <div className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-500 flex items-center justify-between">
+          <span>Redir</span>
+          <div className="relative" ref={colMenuRef}>
+            <button
+              onClick={() => setShowColumnToggle((s) => !s)}
+              title="Toggle columns"
+              className="p-0.5 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+              </svg>
+            </button>
+            {showColumnToggle && (
+              <ColumnToggleMenu
+                columns={ALL_COLUMNS}
+                visibleIds={visibleColIds}
+                onToggle={toggleColVisibility}
+                onClose={() => setShowColumnToggle(false)}
+              />
+            )}
+          </div>
         </div>
       </div>
 
       {/* Data rows */}
       <div className="overflow-auto max-h-[600px] scrollbar-thin">
         {pageData.length === 0 ? (
-          <div className="flex items-center justify-center h-32 text-gray-400 text-sm">
-            No results match your filters
+          <div className="flex flex-col items-center justify-center h-32 text-gray-400 text-sm gap-2">
+            <span>No results match your filters.</span>
+            <button
+              onClick={() => setFilters({})}
+              className="text-blue-500 hover:text-blue-700 text-xs underline"
+            >
+              Clear filters
+            </button>
           </div>
         ) : (
           pageData.map((result, idx) => {
@@ -425,7 +488,6 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
                 }`}
                 style={{ gridTemplateColumns: GRID_COLS, height: ROW_HEIGHT }}
               >
-                {/* Checkbox */}
                 <div className="flex items-center justify-center">
                   <input
                     type="checkbox"
@@ -435,70 +497,63 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
                   />
                 </div>
 
-                {/* # */}
                 <div className="px-3 flex items-center justify-end text-xs text-gray-400 tabular-nums">
                   {globalIdx + 1}
                 </div>
 
-                {/* URL — display path/slug from brand API, href = full link */}
-                <div className="px-3 flex items-center gap-2 min-w-0">
-                  {stateBadge && (
-                    <span className={`flex-shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded ${stateBadge.bg} ${stateBadge.text}`}>
-                      {stateBadge.label}
-                    </span>
-                  )}
-                  <a
-                    href={result.link || result.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={result.link || result.url}
-                    className={`text-sm truncate hover:underline capitalize ${isRemoved ? 'text-gray-400' : 'text-blue-700'}`}
-                  >
-                    {result.displayUrl || pageName(result.url)}
-                  </a>
-                </div>
-
-                {/* Device Type */}
-                <div className="px-3 flex items-center">
-                  <span className="text-xs text-gray-600 truncate">{result.deviceType ?? ''}</span>
-                </div>
-
-                {/* Product Type */}
-                <div className="px-3 flex items-center">
-                  <span className="text-xs text-gray-600 truncate">{result.productType ?? ''}</span>
-                </div>
-
-                {/* Brand */}
-                <div className="px-3 flex items-center">
-                  <span className="text-xs text-gray-600 truncate">{result.brand ?? ''}</span>
-                </div>
-
-                {/* Device ID */}
-                <div className="px-3 flex items-center">
-                  <span className="text-xs text-gray-600 truncate font-mono">{result.deviceId ?? ''}</span>
-                </div>
-
-                {/* Status code */}
-                <div className="px-3 flex items-center justify-end gap-2">
-                  <span className={`h-2 w-2 rounded-full flex-shrink-0 ${STATUS_DOT[result.group] ?? 'bg-gray-300'}`} />
-                  <span className="text-sm font-mono tabular-nums font-medium text-gray-800">
-                    {result.statusCode || '—'}
-                  </span>
-                </div>
-
-                {/* Group badge */}
-                <div className="px-3 flex items-center">
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.bg} ${badge.text}`}>
-                    {badge.label}
-                  </span>
-                </div>
-
-                {/* Response time */}
-                <div className="px-3 flex items-center justify-end">
-                  <span className="text-xs tabular-nums text-gray-500">
-                    {result.responseTime > 0 ? `${result.responseTime.toLocaleString()} ms` : '—'}
-                  </span>
-                </div>
+                {/* Visible columns rendered in order */}
+                {COLUMN_DEFS.map((col) => {
+                  if (col.id === 'url') return (
+                    <div key="url" className="px-3 flex items-center gap-2 min-w-0">
+                      {stateBadge && (
+                        <span className={`flex-shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded ${stateBadge.bg} ${stateBadge.text}`}>
+                          {stateBadge.label}
+                        </span>
+                      )}
+                      <a
+                        href={result.link || result.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={result.link || result.url}
+                        className={`text-sm truncate hover:underline capitalize ${isRemoved ? 'text-gray-400' : 'text-blue-700'}`}
+                      >
+                        {result.displayUrl || pageName(result.url)}
+                      </a>
+                    </div>
+                  )
+                  if (col.id === 'statusCode') return (
+                    <div key="statusCode" className="px-3 flex items-center justify-end gap-2">
+                      <span className={`h-2 w-2 rounded-full flex-shrink-0 ${STATUS_DOT[result.group] ?? 'bg-gray-300'}`} />
+                      <span className="text-sm font-mono tabular-nums font-medium text-gray-800">
+                        {result.statusCode || '—'}
+                      </span>
+                    </div>
+                  )
+                  if (col.id === 'group') return (
+                    <div key="group" className="px-3 flex items-center">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badge.bg} ${badge.text}`}>
+                        {badge.label}
+                      </span>
+                    </div>
+                  )
+                  if (col.id === 'responseTime') return (
+                    <div key="responseTime" className="px-3 flex items-center justify-end">
+                      <span className={`text-xs tabular-nums font-medium ${responseTimeColor(result.responseTime)}`}>
+                        {result.responseTime > 0 ? `${result.responseTime.toLocaleString()} ms` : '—'}
+                      </span>
+                    </div>
+                  )
+                  if (col.id === 'deviceId') return (
+                    <div key="deviceId" className="px-3 flex items-center">
+                      <span className="text-xs text-gray-600 truncate font-mono">{result.deviceId ?? ''}</span>
+                    </div>
+                  )
+                  return (
+                    <div key={col.id} className="px-3 flex items-center">
+                      <span className="text-xs text-gray-600 truncate">{col.getValue(result)}</span>
+                    </div>
+                  )
+                })}
 
                 {/* Redirect */}
                 <div className="px-3 flex items-center">
@@ -513,6 +568,14 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
                       ↪
                     </a>
                   )}
+                  {result.errorReason && !result.finalUrl && (
+                    <span
+                      title={result.errorReason}
+                      className="text-[10px] text-gray-400 truncate"
+                    >
+                      {result.errorReason}
+                    </span>
+                  )}
                 </div>
               </div>
             )
@@ -521,7 +584,7 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
       </div>
 
       <PaginationBar
-        page={page}
+        page={safePage}
         totalPages={totalPages}
         pageSize={pageSize}
         total={sorted.length}
