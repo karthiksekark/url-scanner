@@ -76,33 +76,69 @@ const CARDS = [
     activeTextColor: 'text-white',
     countColor: 'text-purple-800',
   },
+  {
+    key: 'postpaidEol',
+    label: 'Postpaid EOL',
+    field: 'postpaidEol',
+    bg: 'bg-slate-50',
+    border: 'border-slate-300',
+    activeBg: 'bg-slate-600',
+    textColor: 'text-slate-600',
+    activeTextColor: 'text-white',
+    countColor: 'text-slate-800',
+    eolFilter: 'postpaid',
+  },
+  {
+    key: 'prepaidEol',
+    label: 'Prepaid EOL',
+    field: 'prepaidEol',
+    bg: 'bg-indigo-50',
+    border: 'border-indigo-200',
+    activeBg: 'bg-indigo-600',
+    textColor: 'text-indigo-600',
+    activeTextColor: 'text-white',
+    countColor: 'text-indigo-800',
+    eolFilter: 'prepaid',
+  },
+  {
+    key: 'accyEol',
+    label: 'Accy EOL',
+    field: 'accyEol',
+    bg: 'bg-teal-50',
+    border: 'border-teal-200',
+    activeBg: 'bg-teal-600',
+    textColor: 'text-teal-600',
+    activeTextColor: 'text-white',
+    countColor: 'text-teal-800',
+    eolFilter: 'accy',
+  },
 ]
 
 export function SummaryCards({ summary, activeFilter, onFilter }) {
   return (
-    <div className="grid grid-cols-7 gap-3">
+    <div className="grid grid-cols-5 gap-2 lg:grid-cols-10">
       {CARDS.map((card) => {
         const isActive = activeFilter === card.key
-        const count = card.key === 'all' ? summary.total : summary[card.field]
+        const count = summary[card.field] ?? 0
         return (
           <button
             key={card.key}
             onClick={() => onFilter(isActive ? 'all' : card.key)}
             className={[
-              'rounded-lg border p-4 text-left transition-all hover:shadow-md cursor-pointer',
+              'rounded-lg border p-3 text-left transition-all hover:shadow-md cursor-pointer',
               isActive
                 ? `${card.activeBg} ${card.activeTextColor} border-transparent shadow-md`
                 : `${card.bg} ${card.border} hover:border-gray-300`,
             ].join(' ')}
           >
-            <div className={`text-xs font-medium uppercase tracking-wide mb-1 ${isActive ? card.activeTextColor : card.textColor}`}>
+            <div className={`text-[10px] font-semibold uppercase tracking-wide mb-1 leading-tight ${isActive ? card.activeTextColor : card.textColor}`}>
               {card.label}
             </div>
-            <div className={`text-3xl font-bold tabular-nums ${isActive ? card.activeTextColor : card.countColor}`}>
+            <div className={`text-2xl font-bold tabular-nums ${isActive ? card.activeTextColor : card.countColor}`}>
               {count.toLocaleString()}
             </div>
             {summary.total > 0 && card.key !== 'all' && (
-              <div className={`text-xs mt-1 ${isActive ? 'text-white/75' : card.textColor}`}>
+              <div className={`text-[10px] mt-0.5 ${isActive ? 'text-white/75' : card.textColor}`}>
                 {((count / summary.total) * 100).toFixed(1)}%
               </div>
             )}

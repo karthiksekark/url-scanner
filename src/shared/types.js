@@ -11,7 +11,13 @@ export const DEFAULT_SETTINGS = {
   timeoutMs: 10000,
   customHeaders: [],
   sheetsId: '',
+  sheetsTabName: 'Sheet1',
   stalenessHours: 4,
+  autoSyncSheets: true,
+  scheduleEnabled: false,
+  scheduleIntervalHours: 24,
+  scheduleTimeOfDay: '',
+  scheduleIdleOnly: true,
 }
 
 export const EMPTY_SUMMARY = {
@@ -25,6 +31,9 @@ export const EMPTY_SUMMARY = {
   stale: 0,
   new: 0,
   removed: 0,
+  postpaidEol: 0,
+  prepaidEol: 0,
+  accyEol: 0,
 }
 
 export function computeSummary(results) {
@@ -36,6 +45,10 @@ export function computeSummary(results) {
     if (r.urlState === 'stale') summary.stale++
     else if (r.urlState === 'new') summary.new++
     else if (r.urlState === 'removed') summary.removed++
+
+    if (r.eolType === 'postpaid') summary.postpaidEol++
+    else if (r.eolType === 'prepaid') summary.prepaidEol++
+    else if (r.eolType === 'accy') summary.accyEol++
   }
   return summary
 }
@@ -49,7 +62,7 @@ export function getStatusGroup(statusCode, redirected) {
   return 'failed'
 }
 
-// Compute urlState from a result's checkedAt and the staleness threshold.
+// urlState is stored at scan time; this re-derives it only on load from storage.
 // 'removed' is preserved — only changed externally via URL list diff.
 export function computeUrlState(result, now, thresholdMs) {
   if (result.urlState === 'removed') return 'removed'
