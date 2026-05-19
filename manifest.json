@@ -3,7 +3,11 @@
   "name": "URL Scanner",
   "version": "1.0.0",
   "description": "Scan thousands of URLs and report their status",
-  "permissions": ["storage"],
+  "permissions": ["storage", "identity"],
+  "oauth2": {
+    "client_id": "YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/spreadsheets"]
+  },
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "src/background/service-worker.js",

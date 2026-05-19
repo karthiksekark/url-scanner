@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { DEFAULT_SETTINGS } from '../../../shared/types.js'
+import { connectSheets, disconnectSheets, isConnected } from '../../../shared/sheetsSync.js'
 
 const inputCls =
   'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent'
@@ -53,6 +54,14 @@ export function SettingsPanel({ settings, onSave }) {
   const [saved, setSaved] = useState(false)
   const [testResult, setTestResult] = useState(null)
   const [testing, setTesting] = useState(false)
+  const [sheetsConnected, setSheetsConnected] = useState(false)
+  const [sheetsConnecting, setSheetsConnecting] = useState(false)
+  const [sheetsError, setSheetsError] = useState(null)
+  const [sheetsTitle, setSheetsTitle] = useState(null)
+
+  useEffect(() => {
+    isConnected().then(setSheetsConnected)
+  }, [])
 
   function update(key, value) {
     setSaved(false)
@@ -69,6 +78,8 @@ export function SettingsPanel({ settings, onSave }) {
     setForm(DEFAULT_SETTINGS)
     setSaved(false)
     setTestResult(null)
+    setSheetsError(null)
+    setSheetsTitle(null)
   }
 
   async function testRequest(payload, label) {
@@ -94,7 +105,7 @@ export function SettingsPanel({ settings, onSave }) {
     const res = await fetch(url, fetchOptions)
     if (!res.ok) return `${label}: API returned ${res.status} ${res.statusText}`
     const data = await res.json()
-    const count = Array.isArray(data) ? data.length : '?'
+    const count = Array.isArray(data) ? data.length : typeof data === 'object' ? Object.keys(data).length : '?'
     return `✓ ${label}: received ${count} URLs`
   }
 
@@ -114,6 +125,27 @@ export function SettingsPanel({ settings, onSave }) {
     } finally {
       setTesting(false)
     }
+  }
+
+  async function handleSheetsConnect() {
+    if (!form.sheetsId) return
+    setSheetsConnecting(true)
+    setSheetsError(null)
+    try {
+      const title = await connectSheets(form.sheetsId)
+      setSheetsConnected(true)
+      setSheetsTitle(title)
+    } catch (err) {
+      setSheetsError(err.message)
+    } finally {
+      setSheetsConnecting(false)
+    }
+  }
+
+  async function handleSheetsDisconnect() {
+    await disconnectSheets()
+    setSheetsConnected(false)
+    setSheetsTitle(null)
   }
 
   function addHeader() {
@@ -220,16 +252,14 @@ export function SettingsPanel({ settings, onSave }) {
                 </div>
               </label>
             </div>
-
-            {form.enableRequest2 && (
+            {form.enableRequest2 ? (
               <JsonEditor
                 label={payloadLabel}
                 value={form.payload2}
                 onChange={(v) => update('payload2', v)}
                 hint={payloadHint}
               />
-            )}
-            {!form.enableRequest2 && (
+            ) : (
               <p className="text-xs text-gray-400 italic">Request 2 is disabled — only Request 1 will be used.</p>
             )}
           </div>
@@ -270,11 +300,67 @@ export function SettingsPanel({ settings, onSave }) {
               {testing ? 'Testing…' : 'Test connection'}
             </button>
             {testResult && (
-              <pre className={`text-xs whitespace-pre-wrap ${testResult.includes('✓') && !testResult.split('\n').some(l => !l.startsWith('✓')) ? 'text-green-600' : testResult.startsWith('✓') ? 'text-amber-600' : 'text-red-600'}`}>
+              <pre className={`text-xs whitespace-pre-wrap ${testResult.includes('✓') && !testResult.split('\n').some(l => l && !l.startsWith('✓')) ? 'text-green-600' : testResult.startsWith('✓') ? 'text-amber-600' : 'text-red-600'}`}>
                 {testResult}
               </pre>
             )}
           </div>
+        </div>
+      </section>
+
+      {/* Google Sheets */}
+      <section>
+        <h2 className="text-base font-semibold text-gray-900 mb-4 pb-2 border-b">Google Sheets Sync</h2>
+        <div className="space-y-5">
+
+          <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-xs text-blue-700 space-y-1">
+            <p className="font-medium">Setup required before connecting:</p>
+            <ol className="list-decimal list-inside space-y-0.5 text-blue-600">
+              <li>Create a Google Cloud project and enable the Sheets API</li>
+              <li>Create OAuth 2.0 credentials (type: Chrome App) and add your extension ID</li>
+              <li>Add the client_id to <code className="bg-blue-100 px-1 rounded">manifest.json</code> under the <code className="bg-blue-100 px-1 rounded">oauth2</code> key</li>
+              <li>Create a Google Sheet and paste its ID below (from the URL: /spreadsheets/d/<strong>ID</strong>/edit)</li>
+            </ol>
+          </div>
+
+          <Field label="Google Sheet ID" hint="The long ID string from your sheet's URL">
+            <input
+              type="text"
+              value={form.sheetsId}
+              onChange={(e) => update('sheetsId', e.target.value)}
+              placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+              className={inputCls}
+            />
+          </Field>
+
+          <div className="flex items-center gap-3">
+            {sheetsConnected ? (
+              <>
+                <span className="flex items-center gap-1.5 text-sm text-green-700">
+                  <span className="h-2 w-2 rounded-full bg-green-500" />
+                  Connected{sheetsTitle ? ` — ${sheetsTitle}` : ''}
+                </span>
+                <button
+                  onClick={handleSheetsDisconnect}
+                  className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+                >
+                  Disconnect
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={handleSheetsConnect}
+                disabled={!form.sheetsId || sheetsConnecting}
+                className="px-4 py-2 text-sm rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {sheetsConnecting ? 'Connecting…' : 'Connect to Sheets'}
+              </button>
+            )}
+          </div>
+
+          {sheetsError && (
+            <p className="text-xs text-red-600">{sheetsError}</p>
+          )}
         </div>
       </section>
 
@@ -296,6 +382,14 @@ export function SettingsPanel({ settings, onSave }) {
               className="w-full accent-blue-600" />
             <div className="flex justify-between text-xs text-gray-400 mt-1">
               <span>1s</span><span>30s</span><span>60s</span>
+            </div>
+          </Field>
+          <Field label={`Staleness threshold: ${form.stalenessHours}h`} hint="Results older than this are marked stale">
+            <input type="range" min={1} max={24} step={1} value={form.stalenessHours}
+              onChange={(e) => update('stalenessHours', Number(e.target.value))}
+              className="w-full accent-blue-600" />
+            <div className="flex justify-between text-xs text-gray-400 mt-1">
+              <span>1h</span><span>12h</span><span>24h</span>
             </div>
           </Field>
         </div>

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 
 const GROUP_BADGE = {
   up:           { bg: 'bg-green-100',  text: 'text-green-700',  label: 'Up' },
@@ -7,21 +7,27 @@ const GROUP_BADGE = {
   server_error: { bg: 'bg-red-100',    text: 'text-red-700',    label: '5xx Error' },
   failed:       { bg: 'bg-gray-100',   text: 'text-gray-600',   label: 'Failed' },
   timeout:      { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Timeout' },
+  pending:      { bg: 'bg-blue-50',    text: 'text-blue-500',   label: 'Pending' },
 }
 
 const STATUS_DOT = {
   up: 'bg-green-500', redirected: 'bg-amber-400',
   client_error: 'bg-orange-500', server_error: 'bg-red-500',
-  failed: 'bg-gray-400', timeout: 'bg-purple-500',
+  failed: 'bg-gray-400', timeout: 'bg-purple-500', pending: 'bg-blue-300',
+}
+
+const URL_STATE_BADGE = {
+  new:     { bg: 'bg-blue-100',  text: 'text-blue-700',  label: 'New' },
+  stale:   { bg: 'bg-amber-100', text: 'text-amber-700', label: 'Stale' },
+  removed: { bg: 'bg-gray-100',  text: 'text-gray-500',  label: 'Removed' },
 }
 
 const PAGE_SIZE_OPTIONS = [50, 100, 250, 'All']
 const DEFAULT_PAGE_SIZE = 100
 const ROW_HEIGHT = 44
 
-// '3rem 1fr 7rem 8rem 7rem 6rem 8rem 7rem 5rem'
-// # | URL | Device Type | Product Type | Brand | Status | Group | Response | Redirect
-const GRID_COLS = '3rem 1fr 7rem 8rem 7rem 6rem 8rem 7rem 5rem'
+// checkbox | # | URL | Device Type | Product Type | Brand | Status | Group | Response | Redirect
+const GRID_COLS = '2rem 3rem 1fr 7rem 8rem 7rem 6rem 8rem 7rem 5rem'
 
 const COLUMN_DEFS = [
   { id: 'url',          label: 'URL',          sortable: true,  filterable: true,  getValue: (r) => pageName(r.url) },
@@ -43,7 +49,6 @@ function pageName(url) {
   }
 }
 
-// ── Sort icon ─────────────────────────────────────────────────────────────────
 function SortIcon({ active, dir }) {
   return (
     <svg className={`h-3 w-3 flex-shrink-0 ${active ? 'text-blue-600' : 'text-gray-300'}`}
@@ -54,7 +59,6 @@ function SortIcon({ active, dir }) {
   )
 }
 
-// ── Filter icon ───────────────────────────────────────────────────────────────
 function FilterIcon({ active }) {
   return (
     <svg className={`h-3.5 w-3.5 ${active ? 'text-blue-600' : 'text-gray-400'}`}
@@ -65,7 +69,6 @@ function FilterIcon({ active }) {
   )
 }
 
-// ── Per-column header cell ────────────────────────────────────────────────────
 function HeaderCell({ col, sortField, sortDir, onSort, isFilterOpen, onToggleFilter,
   filterValue, onFilterChange, onFilterClear, suggestions, onSuggestionSelect, popoverRef }) {
 
@@ -105,7 +108,6 @@ function HeaderCell({ col, sortField, sortDir, onSort, isFilterOpen, onToggleFil
         )}
       </div>
 
-      {/* Filter popover */}
       {isFilterOpen && (
         <div
           ref={popoverRef}
@@ -151,10 +153,9 @@ function HeaderCell({ col, sortField, sortDir, onSort, isFilterOpen, onToggleFil
   )
 }
 
-// ── Pagination bar ────────────────────────────────────────────────────────────
 function PaginationBar({ page, totalPages, pageSize, total, onPageChange, onPageSizeChange }) {
   const start = pageSize === 'All' ? 1 : (page - 1) * pageSize + 1
-  const end = pageSize === 'All' ? total : Math.min(page * (pageSize), total)
+  const end = pageSize === 'All' ? total : Math.min(page * pageSize, total)
 
   function pageNumbers() {
     if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1)
@@ -170,7 +171,6 @@ function PaginationBar({ page, totalPages, pageSize, total, onPageChange, onPage
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
-      {/* Page size */}
       <div className="flex items-center gap-2">
         <span className="text-sm text-gray-500 whitespace-nowrap">Rows per page</span>
         <select
@@ -184,12 +184,10 @@ function PaginationBar({ page, totalPages, pageSize, total, onPageChange, onPage
         </select>
       </div>
 
-      {/* Count */}
       <span className="text-sm text-gray-500 whitespace-nowrap order-last sm:order-none">
         {total === 0 ? 'No results' : `${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`}
       </span>
 
-      {/* Page buttons */}
       {totalPages > 1 && (
         <div className="flex items-center gap-1">
           <button
@@ -225,8 +223,7 @@ function PaginationBar({ page, totalPages, pageSize, total, onPageChange, onPage
   )
 }
 
-// ── Main table ────────────────────────────────────────────────────────────────
-export function UrlTable({ results }) {
+export function UrlTable({ results, selectedUrls, onSelectionChange }) {
   const [sortField, setSortField] = useState('index')
   const [sortDir, setSortDir] = useState('asc')
   const [activeFilterCol, setActiveFilterCol] = useState(null)
@@ -235,7 +232,6 @@ export function UrlTable({ results }) {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const popoverRef = useRef(null)
 
-  // Close filter popover on outside click
   useEffect(() => {
     if (!activeFilterCol) return
     function onMouseDown(e) {
@@ -247,17 +243,15 @@ export function UrlTable({ results }) {
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [activeFilterCol])
 
-  // Reset to page 1 when filters or sort change
   useEffect(() => { setPage(1) }, [filters, sortField, sortDir])
 
   const filtered = useMemo(() => {
     const activeFilters = COLUMN_DEFS.filter((c) => c.filterable && filters[c.id])
     if (activeFilters.length === 0) return results
     return results.filter((r) =>
-      activeFilters.every((col) => {
-        const val = col.getValue(r).toLowerCase()
-        return val.includes(filters[col.id].toLowerCase())
-      })
+      activeFilters.every((col) =>
+        col.getValue(r).toString().toLowerCase().includes(filters[col.id].toLowerCase())
+      )
     )
   }, [results, filters])
 
@@ -276,10 +270,9 @@ export function UrlTable({ results }) {
   }, [filtered, sortField, sortDir])
 
   const effectivePageSize = pageSize === 'All' ? sorted.length : pageSize
-  const totalPages = Math.max(1, Math.ceil(sorted.length / effectivePageSize))
-  const safePageSize = effectivePageSize || 1
-  const pageData = sorted.slice((page - 1) * safePageSize, page * safePageSize)
-  const pageOffset = (page - 1) * safePageSize
+  const totalPages = Math.max(1, Math.ceil(sorted.length / (effectivePageSize || 1)))
+  const pageData = sorted.slice((page - 1) * (effectivePageSize || 1), page * (effectivePageSize || 1))
+  const pageOffset = (page - 1) * (effectivePageSize || 1)
 
   const suggestions = useMemo(() => {
     if (!activeFilterCol) return []
@@ -288,10 +281,30 @@ export function UrlTable({ results }) {
     const currentVal = (filters[activeFilterCol] ?? '').toLowerCase()
     const unique = [...new Set(results.map((r) => col.getValue(r)).filter(Boolean))]
     return unique
-      .filter((v) => !currentVal || v.toLowerCase().includes(currentVal))
-      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .filter((v) => !currentVal || v.toString().toLowerCase().includes(currentVal))
+      .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }))
       .slice(0, 10)
   }, [activeFilterCol, filters, results])
+
+  // Select-all state based on ALL filtered results (not just current page)
+  const allFilteredUrls = useMemo(() => new Set(sorted.map((r) => r.url)), [sorted])
+  const allSelected = allFilteredUrls.size > 0 && [...allFilteredUrls].every((u) => selectedUrls.has(u))
+  const someSelected = !allSelected && [...allFilteredUrls].some((u) => selectedUrls.has(u))
+
+  const toggleSelectAll = useCallback(() => {
+    if (allSelected) {
+      onSelectionChange(new Set([...selectedUrls].filter((u) => !allFilteredUrls.has(u))))
+    } else {
+      onSelectionChange(new Set([...selectedUrls, ...allFilteredUrls]))
+    }
+  }, [allSelected, allFilteredUrls, selectedUrls, onSelectionChange])
+
+  const toggleRow = useCallback((url) => {
+    const next = new Set(selectedUrls)
+    if (next.has(url)) next.delete(url)
+    else next.add(url)
+    onSelectionChange(next)
+  }, [selectedUrls, onSelectionChange])
 
   function handleSort(fieldId) {
     if (sortField === fieldId) {
@@ -314,11 +327,6 @@ export function UrlTable({ results }) {
     setFilters((prev) => { const n = { ...prev }; delete n[colId]; return n })
   }
 
-  function handlePageSizeChange(s) {
-    setPageSize(s)
-    setPage(1)
-  }
-
   if (results.length === 0) {
     return (
       <div className="flex items-center justify-center h-40 text-gray-400 text-sm border border-dashed border-gray-300 rounded-lg">
@@ -329,7 +337,7 @@ export function UrlTable({ results }) {
 
   return (
     <div className="border border-gray-200 rounded-lg">
-      {/* Active filter chips strip */}
+      {/* Active filter chips */}
       {Object.keys(filters).some((k) => filters[k]) && (
         <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-blue-50 border-b border-blue-100">
           <span className="text-xs text-blue-600 font-medium">Filters:</span>
@@ -354,7 +362,19 @@ export function UrlTable({ results }) {
         className="grid bg-gray-50 border-b border-gray-200"
         style={{ gridTemplateColumns: GRID_COLS, position: 'relative', zIndex: 10 }}
       >
+        {/* Select-all checkbox */}
+        <div className="flex items-center justify-center">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            ref={(el) => { if (el) el.indeterminate = someSelected }}
+            onChange={toggleSelectAll}
+            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+          />
+        </div>
+
         <div className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-500 text-right flex items-center justify-end">#</div>
+
         {COLUMN_DEFS.map((col) => (
           <HeaderCell
             key={col.id}
@@ -372,6 +392,7 @@ export function UrlTable({ results }) {
             popoverRef={activeFilterCol === col.id ? popoverRef : null}
           />
         ))}
+
         <div className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-500 flex items-center">
           Redirect
         </div>
@@ -385,27 +406,52 @@ export function UrlTable({ results }) {
           </div>
         ) : (
           pageData.map((result, idx) => {
-            const badge = GROUP_BADGE[result.group]
+            const badge = GROUP_BADGE[result.group] ?? GROUP_BADGE.failed
             const globalIdx = pageOffset + idx
+            const isSelected = selectedUrls.has(result.url)
+            const stateBadge = result.urlState ? URL_STATE_BADGE[result.urlState] : null
+            const isRemoved = result.urlState === 'removed'
+
             return (
               <div
                 key={`${result.url}-${globalIdx}`}
-                className={`grid border-b border-gray-100 hover:bg-blue-50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}
+                className={`grid border-b border-gray-100 transition-colors ${
+                  isSelected
+                    ? 'bg-blue-50'
+                    : isRemoved
+                      ? 'bg-gray-50/70 opacity-60'
+                      : idx % 2 === 0 ? 'bg-white hover:bg-blue-50/50' : 'bg-gray-50/50 hover:bg-blue-50/50'
+                }`}
                 style={{ gridTemplateColumns: GRID_COLS, height: ROW_HEIGHT }}
               >
+                {/* Checkbox */}
+                <div className="flex items-center justify-center">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleRow(result.url)}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                </div>
+
                 {/* # */}
                 <div className="px-3 flex items-center justify-end text-xs text-gray-400 tabular-nums">
                   {globalIdx + 1}
                 </div>
 
-                {/* URL — page name as link */}
-                <div className="px-3 flex items-center min-w-0">
+                {/* URL — page name as link + urlState badge */}
+                <div className="px-3 flex items-center gap-2 min-w-0">
+                  {stateBadge && (
+                    <span className={`flex-shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded ${stateBadge.bg} ${stateBadge.text}`}>
+                      {stateBadge.label}
+                    </span>
+                  )}
                   <a
                     href={result.url}
                     target="_blank"
                     rel="noopener noreferrer"
                     title={result.url}
-                    className="text-sm text-blue-700 truncate hover:underline capitalize"
+                    className={`text-sm truncate hover:underline capitalize ${isRemoved ? 'text-gray-400' : 'text-blue-700'}`}
                   >
                     {pageName(result.url)}
                   </a>
@@ -428,7 +474,7 @@ export function UrlTable({ results }) {
 
                 {/* Status code */}
                 <div className="px-3 flex items-center justify-end gap-2">
-                  <span className={`h-2 w-2 rounded-full flex-shrink-0 ${STATUS_DOT[result.group]}`} />
+                  <span className={`h-2 w-2 rounded-full flex-shrink-0 ${STATUS_DOT[result.group] ?? 'bg-gray-300'}`} />
                   <span className="text-sm font-mono tabular-nums font-medium text-gray-800">
                     {result.statusCode || '—'}
                   </span>
@@ -468,14 +514,13 @@ export function UrlTable({ results }) {
         )}
       </div>
 
-      {/* Pagination */}
       <PaginationBar
         page={page}
         totalPages={totalPages}
         pageSize={pageSize}
         total={sorted.length}
         onPageChange={setPage}
-        onPageSizeChange={handlePageSizeChange}
+        onPageSizeChange={(s) => { setPageSize(s); setPage(1) }}
       />
     </div>
   )

@@ -11,8 +11,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('scanner')
   const [settings, setSettings] = useState(null)
   const [statusFilter, setStatusFilter] = useState('all')
+  const [selectedUrls, setSelectedUrls] = useState(new Set())
 
-  const { state, startScan, stopScan, recheckFailed } = useScan()
+  const { state, loadFromStorage, refreshUrlList, startScan, stopScan, recheckFailed, recheckSelected, syncToSheets } = useScan()
 
   useEffect(() => {
     getSettings().then((s) => {
@@ -20,7 +21,7 @@ export default function App() {
       if (!s.apiEndpoint) {
         setActiveTab('settings')
       } else {
-        startScan(s)
+        loadFromStorage(s)
       }
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -29,21 +30,31 @@ export default function App() {
     setSettings(s)
     saveSettings(s)
     if (s.apiEndpoint) {
-      startScan(s)
+      loadFromStorage(s)
       setActiveTab('scanner')
     }
   }
 
-  // SummaryCard group pre-filter; UrlTable handles column-level filters, sort, pagination
+  // Clear selection whenever results change (new scan, re-check complete)
+  useEffect(() => {
+    if (state.status === 'complete') setSelectedUrls(new Set())
+  }, [state.status])
+
   const preFiltered = useMemo(() => {
     if (statusFilter === 'all') return state.results
     return state.results.filter((r) => r.group === statusFilter)
   }, [state.results, statusFilter])
 
-  const isScanning = state.status === 'scanning' || state.status === 'fetching_urls'
+  const isScanning = state.status === 'scanning' || state.status === 'fetching_urls' || state.status === 'refreshing_urls' || state.status === 'loading'
   const hasResults = state.results.length > 0
   const failedCount = state.summary.failed + state.summary.timeout
   const hasPreFiltered = preFiltered.length > 0
+  const selectedCount = selectedUrls.size
+
+  const staleCount = state.summary.stale
+  const newCount = state.summary.new
+  const removedCount = state.summary.removed
+  const hasStateInfo = staleCount > 0 || newCount > 0 || removedCount > 0
 
   if (!settings) {
     return (
@@ -88,9 +99,33 @@ export default function App() {
 
           {activeTab === 'scanner' && (
             <div className="flex items-center gap-3">
+              {/* Sheets sync indicator */}
+              {state.sheetsSyncing && (
+                <span className="flex items-center gap-1.5 text-xs text-blue-500">
+                  <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
+                  Syncing…
+                </span>
+              )}
+              {!state.sheetsSyncing && state.sheetsLastSyncAt && (
+                <span className="text-xs text-gray-400" title={`Last synced: ${new Date(state.sheetsLastSyncAt).toLocaleString()}`}>
+                  Sheets ✓
+                </span>
+              )}
+
               {hasResults && !isScanning && (
                 <>
-                  {failedCount > 0 && (
+                  {/* Re-check selected */}
+                  {selectedCount > 0 && (
+                    <button
+                      onClick={() => recheckSelected(selectedUrls, settings)}
+                      className="px-4 py-2 text-sm rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-50 transition-colors"
+                    >
+                      Re-check {selectedCount.toLocaleString()} selected
+                    </button>
+                  )}
+
+                  {/* Re-check failed */}
+                  {failedCount > 0 && selectedCount === 0 && (
                     <button
                       onClick={() => recheckFailed(settings)}
                       className="px-4 py-2 text-sm rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
@@ -98,6 +133,21 @@ export default function App() {
                       Re-check {failedCount.toLocaleString()} failed
                     </button>
                   )}
+
+                  {/* Sync to Sheets */}
+                  {settings.sheetsId && (
+                    <button
+                      onClick={() => syncToSheets(settings)}
+                      disabled={state.sheetsSyncing}
+                      className="px-4 py-2 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                    >
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Sync Sheets
+                    </button>
+                  )}
+
                   <button
                     onClick={() => exportToCsv(state.results)}
                     className="px-4 py-2 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors flex items-center gap-2"
@@ -116,18 +166,28 @@ export default function App() {
                   className="px-5 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors flex items-center gap-2"
                 >
                   <span className="h-2 w-2 rounded-full bg-white animate-pulse" />
-                  Stop scan
+                  Stop
                 </button>
               ) : (
-                <button
-                  onClick={() => {
-                    if (!settings.apiEndpoint) { setActiveTab('settings'); return }
-                    startScan(settings)
-                  }}
-                  className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
-                >
-                  {hasResults ? 'Re-scan' : 'Start scan'}
-                </button>
+                <div className="flex items-center gap-2">
+                  {settings.apiEndpoint && (
+                    <button
+                      onClick={() => refreshUrlList(settings)}
+                      className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+                    >
+                      Refresh list
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      if (!settings.apiEndpoint) { setActiveTab('settings'); return }
+                      startScan(settings)
+                    }}
+                    className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+                  >
+                    {hasResults ? 'Full scan' : 'Start scan'}
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -139,7 +199,7 @@ export default function App() {
           <>
             {state.status === 'error' && state.error && (
               <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-                <strong>Scan failed:</strong> {state.error}
+                <strong>Error:</strong> {state.error}
               </div>
             )}
 
@@ -163,6 +223,35 @@ export default function App() {
               />
             )}
 
+            {/* URL state info bar */}
+            {hasResults && !isScanning && hasStateInfo && (
+              <div className="flex items-center gap-4 text-xs text-gray-500 px-1">
+                {staleCount > 0 && (
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block h-2 w-2 rounded-full bg-amber-400" />
+                    {staleCount.toLocaleString()} stale
+                  </span>
+                )}
+                {newCount > 0 && (
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block h-2 w-2 rounded-full bg-blue-400" />
+                    {newCount.toLocaleString()} new
+                  </span>
+                )}
+                {removedCount > 0 && (
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block h-2 w-2 rounded-full bg-gray-400" />
+                    {removedCount.toLocaleString()} removed
+                  </span>
+                )}
+                {state.urlListFetchedAt && (
+                  <span className="ml-auto text-gray-400">
+                    URL list: {new Date(state.urlListFetchedAt).toLocaleString()}
+                  </span>
+                )}
+              </div>
+            )}
+
             {(isScanning || state.status === 'stopped') && (
               <ProgressBar
                 status={state.status}
@@ -177,7 +266,13 @@ export default function App() {
               </p>
             )}
 
-            {hasPreFiltered && <UrlTable results={preFiltered} />}
+            {hasPreFiltered && (
+              <UrlTable
+                results={preFiltered}
+                selectedUrls={selectedUrls}
+                onSelectionChange={setSelectedUrls}
+              />
+            )}
           </>
         ) : (
           <SettingsPanel settings={settings} onSave={handleSaveSettings} />
