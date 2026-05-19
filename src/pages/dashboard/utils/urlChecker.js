@@ -64,10 +64,10 @@ export async function fetchAllUrls(settings, signal, onFetched) {
   ]
 }
 
-// Fetch brand name for a given ID from the API endpoint.
-// Returns '' on any failure so it never breaks the scan.
+// Fetch enriched data for a given ID from the brand API.
+// Returns an object with all brand fields, or null on any failure.
 async function fetchBrand(apiEndpoint, id, signal) {
-  if (!apiEndpoint || !id) return ''
+  if (!apiEndpoint || !id) return null
   try {
     const res = await fetch(apiEndpoint, {
       method: 'POST',
@@ -78,19 +78,42 @@ async function fetchBrand(apiEndpoint, id, signal) {
     })
     if (!res.ok) {
       console.warn(`[fetchBrand] API returned ${res.status} for id=${id}`)
-      return ''
+      return null
     }
     const data = await res.json()
-    return (Array.isArray(data) && data[0]?.brandName) ? String(data[0].brandName) : ''
+    if (!Array.isArray(data) || !data[0]) return null
+    const item = data[0]
+    return {
+      brand: item.brandName ? String(item.brandName) : '',
+      displayUrl: item.url ? String(item.url) : '',
+      link: item.link ? String(item.link) : '',
+      deviceType: item.deviceType ? String(item.deviceType) : '',
+      productType: item.productType ? String(item.productType) : '',
+      deviceId: item.deviceId ? String(item.deviceId) : '',
+    }
   } catch (err) {
     console.warn('[fetchBrand] fetch failed:', err)
-    return ''
+    return null
+  }
+}
+
+// Spread brand API fields onto a result object, leaving existing values as fallbacks.
+function applyBrandData(result, brandData) {
+  if (!brandData) return result
+  return {
+    ...result,
+    brand: brandData.brand || result.brand || '',
+    displayUrl: brandData.displayUrl || result.displayUrl || '',
+    link: brandData.link || result.link || '',
+    deviceType: brandData.deviceType || result.deviceType || '',
+    productType: brandData.productType || result.productType || '',
+    deviceId: brandData.deviceId || result.deviceId || '',
   }
 }
 
 export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
   if (scanSignal.aborted) {
-    return { ...makeResult(url, 0, 'Cancelled', 'failed', 0), brand: '' }
+    return { ...makeResult(url, 0, 'Cancelled', 'failed', 0), brand: '', displayUrl: '', link: '', deviceType: '', productType: '', deviceId: '' }
   }
 
   const timeoutController = new AbortController()
@@ -109,7 +132,7 @@ export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
       fetchBrand(apiEndpoint, id, timeoutController.signal),
     ])
 
-    const brand = brandSettled.status === 'fulfilled' ? brandSettled.value : ''
+    const brandData = brandSettled.status === 'fulfilled' ? brandSettled.value : null
     const responseTime = headResponseTime || Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
     scanSignal.removeEventListener('abort', onScanAbort)
@@ -119,13 +142,13 @@ export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
       if (!isTimeout && !scanSignal.aborted) {
         console.error('[checkUrl] HEAD request failed:', url, headSettled.reason)
       }
-      return {
-        ...makeResult(url, 0,
+      return applyBrandData(
+        makeResult(url, 0,
           isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error',
           isTimeout ? 'timeout' : 'failed',
           responseTime),
-        brand,
-      }
+        brandData
+      )
     }
 
     const response = headSettled.value
@@ -133,13 +156,13 @@ export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
     // HEAD is unreliable on many servers: 4XX and 5XX from HEAD often don't
     // reflect the real page status — GET is the authoritative check.
     if (response.status < 200 || response.status >= 400) {
-      return await checkUrlGet(url, timeoutMs, scanSignal, brand)
+      return await checkUrlGet(url, timeoutMs, scanSignal, brandData)
     }
 
     const group = getStatusGroup(response.status, response.redirected)
     const finalUrl = response.redirected && response.url !== url ? response.url : undefined
 
-    return {
+    return applyBrandData({
       url,
       statusCode: response.status,
       statusText: response.statusText || defaultStatusText(response.status),
@@ -147,8 +170,7 @@ export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
       responseTime,
       checkedAt: Date.now(),
       finalUrl,
-      brand,
-    }
+    }, brandData)
   } catch (err) {
     const responseTime = headResponseTime || Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
@@ -156,18 +178,18 @@ export async function checkUrl(url, timeoutMs, scanSignal, apiEndpoint, id) {
     console.error('[checkUrl] Unexpected error:', url, err)
 
     const isTimeout = timeoutController.signal.aborted && !scanSignal.aborted
-    return {
-      ...makeResult(url, 0,
+    return applyBrandData(
+      makeResult(url, 0,
         isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error',
         isTimeout ? 'timeout' : 'failed',
         responseTime),
-      brand: '',
-    }
+      null
+    )
   }
 }
 
-// Fallback GET check. brand is pre-fetched by checkUrl so we don't fetch it again.
-async function checkUrlGet(url, timeoutMs, scanSignal, brand = '') {
+// Fallback GET check. brandData is pre-fetched by checkUrl so we don't fetch it again.
+async function checkUrlGet(url, timeoutMs, scanSignal, brandData = null) {
   const timeoutController = new AbortController()
   const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs)
   const onScanAbort = () => timeoutController.abort()
@@ -193,7 +215,7 @@ async function checkUrlGet(url, timeoutMs, scanSignal, brand = '') {
 
     const group = getStatusGroup(response.status, response.redirected)
     const finalUrl = response.redirected && response.url !== url ? response.url : undefined
-    return {
+    return applyBrandData({
       url,
       statusCode: response.status,
       statusText: response.statusText || defaultStatusText(response.status),
@@ -201,8 +223,7 @@ async function checkUrlGet(url, timeoutMs, scanSignal, brand = '') {
       responseTime,
       checkedAt: Date.now(),
       finalUrl,
-      brand,
-    }
+    }, brandData)
   } catch (err) {
     const responseTime = Math.round(performance.now() - startTime)
     clearTimeout(timeoutId)
@@ -211,13 +232,13 @@ async function checkUrlGet(url, timeoutMs, scanSignal, brand = '') {
     if (!isTimeout && !scanSignal.aborted) {
       console.error('[checkUrlGet] GET request failed:', url, err)
     }
-    return {
-      ...makeResult(url, 0,
+    return applyBrandData(
+      makeResult(url, 0,
         isTimeout ? 'Timeout' : scanSignal.aborted ? 'Cancelled' : 'Network Error',
         isTimeout ? 'timeout' : 'failed',
         responseTime),
-      brand,
-    }
+      brandData
+    )
   }
 }
 
@@ -238,7 +259,10 @@ export async function runConcurrent(items, concurrency, fn, onResult, signal) {
 }
 
 function makeResult(url, statusCode, statusText, group, responseTime) {
-  return { url, statusCode, statusText, group, responseTime, checkedAt: Date.now() }
+  return {
+    url, statusCode, statusText, group, responseTime, checkedAt: Date.now(),
+    brand: '', displayUrl: '', link: '', deviceType: '', productType: '', deviceId: '',
+  }
 }
 
 function defaultStatusText(code) {
@@ -253,10 +277,13 @@ function defaultStatusText(code) {
 }
 
 export function exportToCsv(results) {
-  const header = ['URL', 'ID', 'Device Type', 'Product Type', 'Brand', 'Status Code', 'Status Text', 'Group', 'Response Time (ms)', 'Final URL', 'Checked At']
+  const header = ['URL', 'Display URL', 'Link', 'ID', 'Device ID', 'Device Type', 'Product Type', 'Brand', 'Status Code', 'Status Text', 'Group', 'Response Time (ms)', 'Final URL', 'Checked At']
   const rows = results.map((r) => [
     r.url,
+    r.displayUrl ?? '',
+    r.link ?? '',
     r.id ?? '',
+    r.deviceId ?? '',
     r.deviceType ?? '',
     r.productType ?? '',
     r.brand ?? '',
