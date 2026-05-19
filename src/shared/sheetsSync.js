@@ -1,7 +1,8 @@
 const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets'
 
 const HEADERS = [
-  'URL', 'ID', 'Device Type', 'Product Type', 'Brand',
+  'URL', 'Display URL', 'Link', 'ID', 'Device ID',
+  'Device Type', 'Product Type', 'Brand',
   'Status Code', 'Status Text', 'Group', 'Response Time (ms)',
   'Final URL', 'Checked At', 'URL State',
 ]
@@ -37,7 +38,10 @@ async function apiFetch(url, options, token) {
 function resultToRow(r) {
   return [
     r.url ?? '',
+    r.displayUrl ?? '',
+    r.link ?? '',
     r.id ?? '',
+    r.deviceId ?? '',
     r.deviceType ?? '',
     r.productType ?? '',
     r.brand ?? '',
@@ -52,11 +56,14 @@ function resultToRow(r) {
 }
 
 function rowToResult(row) {
-  const [url, id, deviceType, productType, brand, statusCode, statusText, group, responseTime, finalUrl, checkedAt, urlState] = row
+  const [url, displayUrl, link, id, deviceId, deviceType, productType, brand, statusCode, statusText, group, responseTime, finalUrl, checkedAt, urlState] = row
   if (!url) return null
   return {
     url,
+    displayUrl: displayUrl || '',
+    link: link || '',
     id: id || '',
+    deviceId: deviceId || '',
     deviceType: deviceType || '',
     productType: productType || '',
     brand: brand || '',
@@ -100,7 +107,7 @@ export function disconnectSheets() {
 export async function pullFromSheets(sheetId) {
   const token = await getAuthToken(false)
   const data = await apiFetch(
-    `${SHEETS_API}/${sheetId}/values/Sheet1!A1:L`,
+    `${SHEETS_API}/${sheetId}/values/Sheet1!A1:O`,
     {},
     token
   )
@@ -113,12 +120,12 @@ export async function pushToSheets(sheetId, results) {
   const token = await getAuthToken(false)
   const rows = [HEADERS, ...results.map(resultToRow)]
   await apiFetch(
-    `${SHEETS_API}/${sheetId}/values/Sheet1!A1:L?valueInputOption=RAW`,
+    `${SHEETS_API}/${sheetId}/values/Sheet1!A1:O?valueInputOption=RAW`,
     {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        range: 'Sheet1!A1:L',
+        range: 'Sheet1!A1:O',
         majorDimension: 'ROWS',
         values: rows,
       }),

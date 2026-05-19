@@ -281,7 +281,8 @@ export function useScan() {
         ({ url, id }) => checkUrl(url, settings.timeoutMs, signal, settings.apiEndpoint, id),
         (result, { id, deviceType, productType }) => {
           if (scanGenRef.current !== scanGen) return
-          resultsRef.current.push({ ...result, id, deviceType, productType, urlState: 'fresh' })
+          // Brand API values (in result) override hardcoded fallbacks
+          resultsRef.current.push({ deviceType, productType, ...result, id, urlState: 'fresh' })
         },
         signal
       )
@@ -377,7 +378,7 @@ export function useScan() {
         ({ url, id }) => checkUrl(url, settings.timeoutMs, signal, settings.apiEndpoint, id),
         (result, { id, deviceType, productType }) => {
           if (scanGenRef.current !== scanGen) return
-          resultsRef.current.push({ ...result, id, deviceType, productType, urlState: 'fresh' })
+          resultsRef.current.push({ deviceType, productType, ...result, id, urlState: 'fresh' })
         },
         signal
       )

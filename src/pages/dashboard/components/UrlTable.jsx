@@ -26,14 +26,15 @@ const PAGE_SIZE_OPTIONS = [50, 100, 250, 'All']
 const DEFAULT_PAGE_SIZE = 100
 const ROW_HEIGHT = 44
 
-// checkbox | # | URL | Device Type | Product Type | Brand | Status | Group | Response | Redirect
-const GRID_COLS = '2rem 3rem 1fr 7rem 8rem 7rem 6rem 8rem 7rem 5rem'
+// checkbox | # | URL | Device Type | Product Type | Brand | Device ID | Status | Group | Response | Redirect
+const GRID_COLS = '2rem 3rem 1fr 7rem 8rem 7rem 8rem 6rem 8rem 7rem 5rem'
 
 const COLUMN_DEFS = [
-  { id: 'url',          label: 'URL',          sortable: true,  filterable: true,  getValue: (r) => pageName(r.url) },
+  { id: 'url',          label: 'URL',          sortable: true,  filterable: true,  getValue: (r) => r.displayUrl || pageName(r.url) },
   { id: 'deviceType',   label: 'Device Type',  sortable: true,  filterable: true,  getValue: (r) => r.deviceType ?? '' },
   { id: 'productType',  label: 'Product Type', sortable: true,  filterable: true,  getValue: (r) => r.productType ?? '' },
   { id: 'brand',        label: 'Brand',        sortable: true,  filterable: true,  getValue: (r) => r.brand ?? '' },
+  { id: 'deviceId',     label: 'Device ID',    sortable: true,  filterable: true,  getValue: (r) => r.deviceId ?? '' },
   { id: 'statusCode',   label: 'Status',       sortable: true,  filterable: true,  getValue: (r) => String(r.statusCode || '') },
   { id: 'group',        label: 'Group',        sortable: true,  filterable: true,  getValue: (r) => GROUP_BADGE[r.group]?.label ?? r.group },
   { id: 'responseTime', label: 'Response',     sortable: true,  filterable: false, getValue: (r) => r.responseTime },
@@ -439,7 +440,7 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
                   {globalIdx + 1}
                 </div>
 
-                {/* URL — page name as link + urlState badge */}
+                {/* URL — display path/slug from brand API, href = full link */}
                 <div className="px-3 flex items-center gap-2 min-w-0">
                   {stateBadge && (
                     <span className={`flex-shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded ${stateBadge.bg} ${stateBadge.text}`}>
@@ -447,13 +448,13 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
                     </span>
                   )}
                   <a
-                    href={result.url}
+                    href={result.link || result.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    title={result.url}
+                    title={result.link || result.url}
                     className={`text-sm truncate hover:underline capitalize ${isRemoved ? 'text-gray-400' : 'text-blue-700'}`}
                   >
-                    {pageName(result.url)}
+                    {result.displayUrl || pageName(result.url)}
                   </a>
                 </div>
 
@@ -470,6 +471,11 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
                 {/* Brand */}
                 <div className="px-3 flex items-center">
                   <span className="text-xs text-gray-600 truncate">{result.brand ?? ''}</span>
+                </div>
+
+                {/* Device ID */}
+                <div className="px-3 flex items-center">
+                  <span className="text-xs text-gray-600 truncate font-mono">{result.deviceId ?? ''}</span>
                 </div>
 
                 {/* Status code */}
