@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { getSettings, saveSettings } from '../../shared/storage.js'
+import { computeSummary } from '../../shared/types.js'
 import { useScan } from './hooks/useScan.js'
 import { SummaryCards } from './components/SummaryCards.jsx'
 import { ProgressBar } from './components/ProgressBar.jsx'
@@ -8,7 +9,8 @@ import { SettingsPanel } from './components/SettingsPanel.jsx'
 import { Sidebar } from './components/Sidebar.jsx'
 import { PasteUrlsBar } from './components/PasteUrlsBar.jsx'
 import { ScanHistory } from './components/ScanHistory.jsx'
-import { exportToCsv } from './utils/urlChecker.js'
+import { exportToCsv, exportToXlsx } from './utils/urlChecker.js'
+import { ALL_COLUMNS } from './utils/columns.js'
 
 const EMPTY_SIDEBAR_FILTERS = { deviceType: new Set(), productType: new Set(), brand: new Set() }
 
@@ -97,6 +99,10 @@ export default function App() {
   )
   const [showHistory, setShowHistory] = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
+  const [pasteViewUrls, setPasteViewUrls] = useState(null)
+  const [columnFilters, setColumnFilters] = useState({})
+  const [showExportMenu, setShowExportMenu] = useState(false)
+  const exportMenuRef = useRef(null)
 
   const {
     state, loadFromStorage, refreshUrlList, startScan, stopScan,
@@ -124,6 +130,15 @@ export default function App() {
     if (state.status === 'complete') setSelectedUrls(new Set())
   }, [state.status])
 
+  useEffect(() => {
+    if (!showExportMenu) return
+    function onMouseDown(e) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) setShowExportMenu(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [showExportMenu])
+
   function toggleSidebar() {
     setSidebarCollapsed((prev) => {
       const next = !prev
@@ -132,9 +147,11 @@ export default function App() {
     })
   }
 
-  // Apply status tile filter + EOL filter + sidebar facet filters (AND across categories)
+  // Apply paste view base + status tile + EOL filter + sidebar facet filters (AND across categories)
   const preFiltered = useMemo(() => {
-    let results = state.results
+    let results = pasteViewUrls
+      ? state.results.filter((r) => pasteViewUrls.has(r.url))
+      : state.results
 
     if (statusFilter === 'postpaidEol') {
       results = results.filter((r) => r.eolType === 'postpaid')
@@ -157,7 +174,21 @@ export default function App() {
     }
 
     return results
-  }, [state.results, statusFilter, sidebarFilters])
+  }, [state.results, statusFilter, sidebarFilters, pasteViewUrls])
+
+  // Apply column filters on top of preFiltered — used for summary card counts
+  const tableFiltered = useMemo(() => {
+    const active = Object.entries(columnFilters).filter(([, v]) => v)
+    if (!active.length) return preFiltered
+    return preFiltered.filter((r) =>
+      active.every(([colId, val]) => {
+        const col = ALL_COLUMNS.find((c) => c.id === colId)
+        return col ? col.getValue(r).toString().toLowerCase().includes(val.toLowerCase()) : true
+      })
+    )
+  }, [preFiltered, columnFilters])
+
+  const displaySummary = useMemo(() => computeSummary(tableFiltered), [tableFiltered])
 
   const isScanning = ['scanning', 'fetching_urls', 'fetching_brands', 'refreshing_urls', 'loading'].includes(state.status)
   const hasResults = state.results.length > 0
@@ -173,6 +204,7 @@ export default function App() {
 
   function handleStartScan() {
     if (!settings.apiEndpoint) { setActiveTab('settings'); return }
+    setPasteViewUrls(null)
     if (hasResults) { setShowConfirm(true); return }
     startScan(settings)
   }
@@ -182,8 +214,10 @@ export default function App() {
     startScan(settings)
   }
 
-  const handleRecheckPasted = useCallback((urls) => {
-    recheckPasted(urls, settings)
+  const handleRecheckPasted = useCallback(async (urls) => {
+    setPasteViewUrls(null)
+    await recheckPasted(urls, settings)
+    setPasteViewUrls(new Set(urls))
   }, [recheckPasted, settings])
 
   if (!settings) {
@@ -289,13 +323,36 @@ export default function App() {
                     </button>
                   )}
 
-                  <button onClick={() => exportToCsv(state.results)}
-                    className="px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors flex items-center gap-1.5">
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    Export CSV
-                  </button>
+                  <div className="relative" ref={exportMenuRef}>
+                    <button
+                      onClick={() => setShowExportMenu((s) => !s)}
+                      className="px-3 py-2 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors flex items-center gap-1.5"
+                    >
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Export
+                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    {showExportMenu && (
+                      <div className="absolute right-0 mt-1 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1">
+                        <button
+                          onClick={() => { exportToCsv(state.results); setShowExportMenu(false) }}
+                          className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                        >
+                          Export CSV
+                        </button>
+                        <button
+                          onClick={() => { exportToXlsx(state.results); setShowExportMenu(false) }}
+                          className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                        >
+                          Export XLSX
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </>
               )}
 
@@ -345,7 +402,7 @@ export default function App() {
 
             {(hasResults || isScanning) && (
               <SummaryCards
-                summary={state.summary}
+                summary={displaySummary}
                 activeFilter={statusFilter}
                 onFilter={(f) => { setStatusFilter(f); setSidebarFilters(EMPTY_SIDEBAR_FILTERS) }}
               />
@@ -415,10 +472,26 @@ export default function App() {
 
                 <div className="flex-1 min-w-0 p-4 space-y-3">
                   <PasteUrlsBar onScan={handleRecheckPasted} isScanning={isScanning} />
+                  {pasteViewUrls && (
+                    <div className="flex items-center gap-3 px-4 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                      <svg className="h-4 w-4 flex-shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span>Showing {pasteViewUrls.size} scanned URL{pasteViewUrls.size !== 1 ? 's' : ''}</span>
+                      <button
+                        onClick={() => setPasteViewUrls(null)}
+                        className="ml-auto flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium transition-colors"
+                      >
+                        ← Back to full results
+                      </button>
+                    </div>
+                  )}
                   <UrlTable
                     results={preFiltered}
                     selectedUrls={selectedUrls}
                     onSelectionChange={setSelectedUrls}
+                    columnFilters={columnFilters}
+                    onColumnFiltersChange={setColumnFilters}
                   />
                 </div>
               </div>

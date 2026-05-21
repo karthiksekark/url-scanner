@@ -1,3 +1,4 @@
+import * as XLSX from 'xlsx'
 import { getStatusGroup } from '../../../shared/types.js'
 import { getBrandCacheMap, saveBrandCacheEntries } from '../../../shared/db.js'
 
@@ -388,4 +389,41 @@ export function exportToCsv(results) {
   a.download = `url-scan-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`
   a.click()
   URL.revokeObjectURL(url)
+}
+
+// ── XLSX Export ───────────────────────────────────────────────────────────────
+
+export function exportToXlsx(results) {
+  const header = [
+    'URL', 'Display URL', 'Link', 'ID', 'Device ID',
+    'Device Type', 'Product Type', 'Brand', 'EOL Type',
+    'Status Code', 'Status Text', 'Group', 'Response Time (ms)',
+    'Final URL', 'Checked At', 'URL State', 'Error Reason',
+  ]
+  const rows = results.map((r) => [
+    r.url,
+    r.displayUrl ?? '',
+    r.link ?? '',
+    r.id ?? '',
+    r.deviceId ?? '',
+    r.deviceType ?? '',
+    r.productType ?? '',
+    r.brand ?? '',
+    r.eolType ?? '',
+    r.statusCode || '',
+    r.statusText ?? '',
+    r.group,
+    r.responseTime,
+    r.finalUrl ?? '',
+    r.checkedAt ? new Date(r.checkedAt).toISOString() : '',
+    r.urlState ?? '',
+    r.errorReason ?? '',
+  ])
+
+  const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
+  ws['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activeCell: 'A2', sqref: 'A2' }
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Results')
+  XLSX.writeFile(wb, `url-scan-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.xlsx`)
 }

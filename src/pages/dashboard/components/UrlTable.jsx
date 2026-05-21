@@ -1,14 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-
-const GROUP_BADGE = {
-  up:           { bg: 'bg-green-100',  text: 'text-green-700',  label: 'Up' },
-  redirected:   { bg: 'bg-amber-100',  text: 'text-amber-700',  label: 'Redirected' },
-  client_error: { bg: 'bg-orange-100', text: 'text-orange-700', label: '4xx Error' },
-  server_error: { bg: 'bg-red-100',    text: 'text-red-700',    label: '5xx Error' },
-  failed:       { bg: 'bg-gray-100',   text: 'text-gray-600',   label: 'Failed' },
-  timeout:      { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Timeout' },
-  pending:      { bg: 'bg-blue-50',    text: 'text-blue-500',   label: 'Pending' },
-}
+import { ALL_COLUMNS, GROUP_BADGE, pageName } from '../utils/columns.js'
 
 const STATUS_DOT = {
   up: 'bg-green-500', redirected: 'bg-amber-400',
@@ -25,29 +16,6 @@ const URL_STATE_BADGE = {
 const PAGE_SIZE_OPTIONS = [50, 100, 250, 'All']
 const DEFAULT_PAGE_SIZE = 100
 const ROW_HEIGHT = 44
-
-// All possible columns — visibility toggled by user
-const ALL_COLUMNS = [
-  { id: 'url',          label: 'URL',          sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => r.displayUrl || pageName(r.url) },
-  { id: 'deviceType',   label: 'Device Type',  sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => r.deviceType ?? '' },
-  { id: 'productType',  label: 'Product Type', sortable: true,  filterable: true,  defaultVisible: false, getValue: (r) => r.productType ?? '' },
-  { id: 'brand',        label: 'Brand',        sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => r.brand ?? '' },
-  { id: 'deviceId',     label: 'Device ID',    sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => r.deviceId ?? '' },
-  { id: 'eolType',      label: 'EOL',          sortable: true,  filterable: true,  defaultVisible: false, getValue: (r) => r.eolType ?? '' },
-  { id: 'statusCode',   label: 'Status',       sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => String(r.statusCode || '') },
-  { id: 'group',        label: 'Group',        sortable: true,  filterable: true,  defaultVisible: true,  getValue: (r) => GROUP_BADGE[r.group]?.label ?? r.group },
-  { id: 'responseTime', label: 'Response',     sortable: true,  filterable: false, defaultVisible: true,  getValue: (r) => r.responseTime },
-]
-
-function pageName(url) {
-  try {
-    const segments = new URL(url).pathname.split('/').filter(Boolean)
-    const last = segments[segments.length - 1] ?? ''
-    return last.replace(/-/g, ' ') || url
-  } catch {
-    return url
-  }
-}
 
 function responseTimeColor(ms) {
   if (!ms || ms <= 0) return 'text-gray-400'
@@ -236,11 +204,10 @@ function buildGridCols(visibleCols) {
   return ['2rem', '3rem', ...visibleCols.map((c) => widths[c.id] ?? '8rem'), '5rem'].join(' ')
 }
 
-export function UrlTable({ results, selectedUrls, onSelectionChange }) {
+export function UrlTable({ results, selectedUrls, onSelectionChange, columnFilters, onColumnFiltersChange }) {
   const [sortField, setSortField] = useState('index')
   const [sortDir, setSortDir] = useState('asc')
   const [activeFilterCol, setActiveFilterCol] = useState(null)
-  const [filters, setFilters] = useState({})
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [showColumnToggle, setShowColumnToggle] = useState(false)
@@ -275,23 +242,13 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
   }, [showColumnToggle])
 
   // Reset to page 1 when filters or sort change, but preserve page when only results refresh
-  useEffect(() => { setPage(1) }, [filters, sortField, sortDir])
-
-  const filtered = useMemo(() => {
-    const activeFilters = COLUMN_DEFS.filter((c) => c.filterable && filters[c.id])
-    if (activeFilters.length === 0) return results
-    return results.filter((r) =>
-      activeFilters.every((col) =>
-        col.getValue(r).toString().toLowerCase().includes(filters[col.id].toLowerCase())
-      )
-    )
-  }, [results, filters, COLUMN_DEFS])
+  useEffect(() => { setPage(1) }, [columnFilters, sortField, sortDir])
 
   const sorted = useMemo(() => {
-    if (sortField === 'index') return filtered
+    if (sortField === 'index') return results
     const col = ALL_COLUMNS.find((c) => c.id === sortField)
-    if (!col) return filtered
-    return [...filtered].sort((a, b) => {
+    if (!col) return results
+    return [...results].sort((a, b) => {
       const va = col.getValue(a)
       const vb = col.getValue(b)
       const cmp = typeof va === 'number' && typeof vb === 'number'
@@ -299,7 +256,7 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
         : String(va).localeCompare(String(vb), undefined, { numeric: true })
       return sortDir === 'asc' ? cmp : -cmp
     })
-  }, [filtered, sortField, sortDir])
+  }, [results, sortField, sortDir])
 
   const effectivePageSize = pageSize === 'All' ? sorted.length : pageSize
   const totalPages = Math.max(1, Math.ceil(sorted.length / (effectivePageSize || 1)))
@@ -311,13 +268,13 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
     if (!activeFilterCol) return []
     const col = COLUMN_DEFS.find((c) => c.id === activeFilterCol)
     if (!col?.filterable) return []
-    const currentVal = (filters[activeFilterCol] ?? '').toLowerCase()
+    const currentVal = (columnFilters[activeFilterCol] ?? '').toLowerCase()
     const unique = [...new Set(results.map((r) => col.getValue(r)).filter(Boolean).map(String))]
     return unique
       .filter((v) => !currentVal || v.toLowerCase().includes(currentVal))
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       .slice(0, 10)
-  }, [activeFilterCol, filters, results, COLUMN_DEFS])
+  }, [activeFilterCol, columnFilters, results, COLUMN_DEFS])
 
   const allFilteredUrls = useMemo(() => new Set(sorted.map((r) => r.url)), [sorted])
   const allSelected = allFilteredUrls.size > 0 && [...allFilteredUrls].every((u) => selectedUrls.has(u))
@@ -348,11 +305,13 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
   }
 
   function setFilter(colId, val) {
-    setFilters((prev) => ({ ...prev, [colId]: val }))
+    onColumnFiltersChange({ ...columnFilters, [colId]: val })
   }
 
   function clearFilter(colId) {
-    setFilters((prev) => { const n = { ...prev }; delete n[colId]; return n })
+    const n = { ...columnFilters }
+    delete n[colId]
+    onColumnFiltersChange(n)
   }
 
   function toggleColVisibility(colId) {
@@ -375,7 +334,7 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
     )
   }
 
-  const hasColumnFilters = Object.keys(filters).some((k) => filters[k])
+  const hasColumnFilters = Object.keys(columnFilters).some((k) => columnFilters[k])
 
   return (
     <div className="border border-gray-200 rounded-lg">
@@ -383,9 +342,9 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
       {hasColumnFilters && (
         <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-blue-50 border-b border-blue-100">
           <span className="text-xs text-blue-600 font-medium">Filters:</span>
-          {COLUMN_DEFS.filter((c) => filters[c.id]).map((col) => (
+          {COLUMN_DEFS.filter((c) => columnFilters[c.id]).map((col) => (
             <span key={col.id} className="inline-flex items-center gap-1 text-xs bg-white border border-blue-200 text-blue-700 px-2 py-0.5 rounded-full">
-              <span className="font-medium">{col.label}:</span> {filters[col.id]}
+              <span className="font-medium">{col.label}:</span> {columnFilters[col.id]}
               <button onClick={() => clearFilter(col.id)} className="text-blue-400 hover:text-blue-700 ml-0.5">
                 <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -393,7 +352,7 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
               </button>
             </span>
           ))}
-          <button onClick={() => setFilters({})} className="text-xs text-blue-500 hover:text-blue-700 underline ml-auto">
+          <button onClick={() => onColumnFiltersChange({})} className="text-xs text-blue-500 hover:text-blue-700 underline ml-auto">
             Clear all
           </button>
         </div>
@@ -422,7 +381,7 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
             onSort={handleSort}
             isFilterOpen={activeFilterCol === col.id}
             onToggleFilter={toggleFilter}
-            filterValue={filters[col.id] ?? ''}
+            filterValue={columnFilters[col.id] ?? ''}
             onFilterChange={(v) => setFilter(col.id, v)}
             onFilterClear={() => clearFilter(col.id)}
             suggestions={activeFilterCol === col.id ? suggestions : []}
@@ -462,7 +421,7 @@ export function UrlTable({ results, selectedUrls, onSelectionChange }) {
           <div className="flex flex-col items-center justify-center h-32 text-gray-400 text-sm gap-2">
             <span>No results match your filters.</span>
             <button
-              onClick={() => setFilters({})}
+              onClick={() => onColumnFiltersChange({})}
               className="text-blue-500 hover:text-blue-700 text-xs underline"
             >
               Clear filters
